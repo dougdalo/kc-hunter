@@ -1,0 +1,29 @@
+# Binários e executáveis
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+# Ignorar o binário gerado (Go compila para o nome da pasta)
+bin/
+# Se estiver usando Go Modules, não ignore a pasta vendor,
+# mas se não, ignore-a:
+# vendor/
+
+# Arquivos de Teste e Cobertura
+*.test
+*.out
+*.cov
+
+# Arquivos de ambiente e segredos
+.env
+.env.local
+
+# Pastas da IDE/Editor
+.vscode/
+.idea/
+*.swp
+.claude
+
+# Arquivos temporários
+*.tmp
