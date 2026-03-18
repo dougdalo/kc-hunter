@@ -209,15 +209,15 @@ kc-hunter inspect-connector jdbc-inventory-source
 ┌─────────────────────────────────────────────────────────────────────┐
 │                          kc-hunter                                  │
 │                                                                     │
-│  ┌──────────────┐   ┌──────────────────┐   ┌────────────────────┐  │
-│  │  K8s Metrics  │   │  Connect REST    │   │  JMX Metrics       │  │
-│  │  Server       │   │  API             │   │  (optional)        │  │
-│  │              │   │                  │   │                    │  │
-│  │  • Pod RAM    │   │  • Connectors    │   │  • poll_batch_avg  │  │
-│  │  • Pod CPU    │   │  • Task States   │   │  • put_batch_avg   │  │
-│  │  • Mem Limit  │   │  • Worker IDs    │   │  • batch_size_avg  │  │
-│  │              │   │  • Error Traces  │   │  • retry_count     │  │
-│  └──────┬───────┘   └────────┬─────────┘   └─────────┬──────────┘  │
+│  ┌──────────────┐   ┌──────────────────┐    ┌────────────────────┐  │
+│  │  K8s Metrics │   │  Connect REST    │    │  JMX Metrics       │  │
+│  │  Server      │   │  API             │    │  (optional)        │  │
+│  │              │   │                  │    │                    │  │
+│  │  • Pod RAM   │   │  • Connectors    │    │  • poll_batch_avg  │  │
+│  │  • Pod CPU   │   │  • Task States   │    │  • put_batch_avg   │  │
+│  │  • Mem Limit │   │  • Worker IDs    │    │  • batch_size_avg  │  │
+│  │              │   │  • Error Traces  │    │  • retry_count     │  │
+│  └──────┬───────┘   └────────┬─────────┘    └─────────┬──────────┘  │
 │         │                    │                        │             │
 │         └────────────┬───────┴────────────────────────┘             │
 │                      ▼                                              │
