@@ -32,7 +32,12 @@ using indirect evidence signals.
 
 By default, Connect REST calls are made via exec into pods (curl/wget
 on localhost), which bypasses networking issues (e.g. GKE timeouts).
-Use --use-proxy to route through the K8s API server proxy instead.`,
+Use --use-proxy to route through the K8s API server proxy instead.
+
+Run without arguments to launch an interactive guided wizard.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runInteractive()
+	},
 }
 
 func init() {

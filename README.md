@@ -38,6 +38,7 @@ When you're running **800+ connectors** across a Strimzi Kafka Connect cluster, 
 | 📊 **Flexible Metrics** | Three metrics backends: Prometheus (PromQL queries), direct JMX exporter scrape (`/metrics`), or none (scoring still works with K8s + Connect REST signals alone). |
 | 🛡️ **Read-Only & Safe** | Zero mutations. No POST, DELETE, or PATCH calls. Uses your existing kubeconfig credentials and TLS tunnel. Safe for production at any scale. |
 | 📋 **Multiple Output Formats** | Human-readable tables (default) or structured JSON for pipeline integration. |
+| 🧙 **Interactive TUI Wizard** | Run without arguments for a guided experience — action select, namespace discovery via K8s API, and pod picker. Powered by K8s API Proxy and Exec-based transport for robust connectivity in any environment. |
 
 ---
 
@@ -64,7 +65,35 @@ go build -o bin/kc-hunter ./cmd/kcdiag/
 
 ---
 
+## 🧙 Interactive Mode
+
+Running `kc-hunter` **without any arguments** launches an interactive guided wizard:
+
+```bash
+sudo ./kc-hunter
+```
+
+The wizard walks you through:
+
+1. **Action Select** — Choose between Suspect Report, Pod Overview, Worker Map, or Deep JVM Inspect.
+2. **Namespace Select** — Dynamically fetches all namespaces from the cluster and presents a searchable list.
+3. **Pod Select** *(Deep JVM Inspect only)* — Pick a specific Kafka Connect pod or inspect all pods at once.
+
+This is the easiest way to get started — no flags or subcommands required. All standard CLI flags still work when you want to script or automate.
+
+---
+
 ## 📖 Usage
+
+### Interactive vs CLI
+
+```bash
+# Interactive — guided wizard
+./kc-hunter
+
+# CLI — direct subcommand with flags
+./kc-hunter suspect -n kafka-prod --top 5
+```
 
 ### `suspect` — Rank Memory Culprits
 
@@ -273,8 +302,9 @@ kcdiag/
 │   │   ├── pods.go       # Pod listing
 │   │   ├── workers.go    # Worker-to-task mapping
 │   │   ├── connectors.go # Connector inventory
-│   │   ├── inspect.go    # Single connector/worker detail
-│   │   └── deep_inspect.go # JVM heap inspection
+│   │   ├── inspect.go      # Single connector/worker detail
+│   │   ├── deep_inspect.go # JVM heap inspection
+│   │   └── interactive.go  # TUI wizard (no-args mode)
 │   ├── k8s/              # Kubernetes API integration
 │   │   └── client.go     # Pod discovery, metrics, proxy, SPDY exec
 │   ├── connect/          # Kafka Connect REST client

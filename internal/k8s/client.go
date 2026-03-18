@@ -237,6 +237,19 @@ func (c *Client) ExecInPod(ctx context.Context, namespace, podName, container st
 	return &ExecResult{Stdout: stdout.String(), Stderr: stderr.String()}, nil
 }
 
+// ListNamespaces returns all namespace names in the cluster.
+func (c *Client) ListNamespaces(ctx context.Context) ([]string, error) {
+	list, err := c.clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("list namespaces: %w", err)
+	}
+	names := make([]string, 0, len(list.Items))
+	for _, ns := range list.Items {
+		names = append(names, ns.Name)
+	}
+	return names, nil
+}
+
 // --- internal helpers ---
 
 type podMetric struct {
