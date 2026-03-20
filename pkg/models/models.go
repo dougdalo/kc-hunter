@@ -1,4 +1,4 @@
-// Package models defines the core domain types shared across kcdiag.
+// Package models defines the core domain types shared across kc-hunter.
 // All types use JSON tags for machine-readable output.
 package models
 

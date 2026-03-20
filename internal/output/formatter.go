@@ -8,7 +8,7 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/dougdalo/kcdiag/pkg/models"
+	"github.com/dougdalo/kc-hunter/pkg/models"
 )
 
 // Formatter renders diagnostic data.

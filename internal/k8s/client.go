@@ -9,8 +9,8 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/dougdalo/kcdiag/internal/config"
-	"github.com/dougdalo/kcdiag/pkg/models"
+	"github.com/dougdalo/kc-hunter/internal/config"
+	"github.com/dougdalo/kc-hunter/pkg/models"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -24,7 +24,7 @@ import (
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
-// Client wraps the Kubernetes API with kcdiag-specific operations.
+// Client wraps the Kubernetes API with kc-hunter-specific operations.
 type Client struct {
 	clientset     kubernetes.Interface
 	metricsClient metricsclient.Interface

@@ -11,7 +11,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/dougdalo/kcdiag/pkg/models"
+	"github.com/dougdalo/kc-hunter/pkg/models"
 )
 
 // Thresholds control when each signal fires. Tune to your environment.

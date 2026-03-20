@@ -6,7 +6,7 @@ import (
 	"context"
 	"strconv"
 
-	"github.com/dougdalo/kcdiag/pkg/models"
+	"github.com/dougdalo/kc-hunter/pkg/models"
 )
 
 // Provider is the interface for fetching connector-level metrics.

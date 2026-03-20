@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/dougdalo/kcdiag/internal/connect"
-	"github.com/dougdalo/kcdiag/internal/discovery"
-	"github.com/dougdalo/kcdiag/pkg/models"
+	"github.com/dougdalo/kc-hunter/internal/connect"
+	"github.com/dougdalo/kc-hunter/internal/discovery"
+	"github.com/dougdalo/kc-hunter/pkg/models"
 	"github.com/spf13/cobra"
 )
 

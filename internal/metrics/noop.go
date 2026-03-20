@@ -3,7 +3,7 @@ package metrics
 import (
 	"context"
 
-	"github.com/dougdalo/kcdiag/pkg/models"
+	"github.com/dougdalo/kc-hunter/pkg/models"
 )
 
 // NoopProvider is used when no metrics source is configured.

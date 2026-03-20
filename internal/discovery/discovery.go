@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/dougdalo/kcdiag/pkg/models"
+	"github.com/dougdalo/kc-hunter/pkg/models"
 )
 
 // GroupPodsByClusters groups pods by their strimzi.io/cluster label.

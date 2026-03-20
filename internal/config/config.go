@@ -1,4 +1,4 @@
-// Package config provides configuration loading for kcdiag.
+// Package config provides configuration loading for kc-hunter.
 package config
 
 import (

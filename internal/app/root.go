@@ -1,4 +1,4 @@
-// Package app defines the Cobra CLI commands for kcdiag.
+// Package app defines the Cobra CLI commands for kc-hunter.
 // Each command file uses shared initialization from this root.
 package app
 
@@ -8,22 +8,22 @@ import (
 	"os"
 	"time"
 
-	"github.com/dougdalo/kcdiag/internal/config"
-	"github.com/dougdalo/kcdiag/internal/connect"
-	"github.com/dougdalo/kcdiag/internal/k8s"
-	"github.com/dougdalo/kcdiag/internal/metrics"
-	"github.com/dougdalo/kcdiag/internal/output"
-	"github.com/dougdalo/kcdiag/internal/scoring"
-	"github.com/dougdalo/kcdiag/pkg/models"
+	"github.com/dougdalo/kc-hunter/internal/config"
+	"github.com/dougdalo/kc-hunter/internal/connect"
+	"github.com/dougdalo/kc-hunter/internal/k8s"
+	"github.com/dougdalo/kc-hunter/internal/metrics"
+	"github.com/dougdalo/kc-hunter/internal/output"
+	"github.com/dougdalo/kc-hunter/internal/scoring"
+	"github.com/dougdalo/kc-hunter/pkg/models"
 	"github.com/spf13/cobra"
 )
 
 var cfg *config.Config
 
 var rootCmd = &cobra.Command{
-	Use:   "kcdiag",
+	Use:   "kc-hunter",
 	Short: "Kafka Connect memory diagnostics for Strimzi on Kubernetes",
-	Long: `kcdiag correlates pod-level resource metrics, Kafka Connect REST API
+	Long: `kc-hunter correlates pod-level resource metrics, Kafka Connect REST API
 state, and optional Prometheus/JMX metrics to identify which connectors
 are most likely causing memory pressure in Strimzi Kafka Connect clusters.
 

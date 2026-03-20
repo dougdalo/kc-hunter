@@ -8,8 +8,8 @@ import (
 	"sync"
 	"text/tabwriter"
 
-	"github.com/dougdalo/kcdiag/internal/jvm"
-	"github.com/dougdalo/kcdiag/internal/k8s"
+	"github.com/dougdalo/kc-hunter/internal/jvm"
+	"github.com/dougdalo/kc-hunter/internal/k8s"
 	"github.com/spf13/cobra"
 )
 

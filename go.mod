@@ -1,4 +1,4 @@
-module github.com/dougdalo/kcdiag
+module github.com/dougdalo/kc-hunter
 
 go 1.25.0
 

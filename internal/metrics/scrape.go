@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/dougdalo/kcdiag/pkg/models"
+	"github.com/dougdalo/kc-hunter/pkg/models"
 )
 
 // ScrapeProvider fetches metrics by directly hitting the /metrics endpoint

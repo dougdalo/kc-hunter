@@ -50,7 +50,7 @@ Build a fully static binary with no `glibc` dependency — ideal for bastion hos
 
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -ldflags='-s -w' -o bin/kc-hunter ./cmd/kcdiag/
+  go build -ldflags='-s -w' -o bin/kc-hunter ./cmd/kc-hunter/
 ```
 
 The resulting `bin/kc-hunter` binary is self-contained and can be copied to any Linux x86_64 host.
@@ -58,9 +58,9 @@ The resulting `bin/kc-hunter` binary is self-contained and can be copied to any 
 ### From Source
 
 ```bash
-git clone https://github.com/dougdalo/kcdiag.git
-cd kcdiag
-go build -o bin/kc-hunter ./cmd/kcdiag/
+git clone https://github.com/dougdalo/kc-hunter.git
+cd kc-hunter
+go build -o bin/kc-hunter ./cmd/kc-hunter/
 ```
 
 ---
@@ -292,8 +292,8 @@ The scoring engine flags these connector types with a baseline suspicion bonus:
 ## 🏗️ Project Structure
 
 ```
-kcdiag/
-├── cmd/kcdiag/           # Application entrypoint
+kc-hunter/
+├── cmd/kc-hunter/        # Application entrypoint
 │   └── main.go
 ├── internal/
 │   ├── app/              # CLI commands & orchestration
@@ -343,7 +343,7 @@ kcdiag/
 
 ```bash
 # Build
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o bin/kc-hunter ./cmd/kcdiag/
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags='-s -w' -o bin/kc-hunter ./cmd/kc-hunter/
 
 # Diagnose — who's eating the heap?
 kc-hunter suspect -n kafka-prod --top 10

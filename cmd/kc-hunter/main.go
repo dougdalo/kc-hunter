@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/dougdalo/kcdiag/internal/app"
+	"github.com/dougdalo/kc-hunter/internal/app"
 )
 
 func main() {
