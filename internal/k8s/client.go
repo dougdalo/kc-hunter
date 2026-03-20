@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 
@@ -108,9 +109,17 @@ func (c *Client) DiscoverConnectPods(ctx context.Context) ([]models.PodInfo, err
 	return allPods, nil
 }
 
+// PodMetricsResult holds the outcome of pod metrics collection.
+type PodMetricsResult struct {
+	Enriched int      // number of pods enriched with metrics data
+	Warnings []string // issues encountered during collection
+}
+
 // GetPodMetrics retrieves memory/CPU from metrics-server and enriches pods in-place.
-// Returns nil on metrics-server errors so callers can continue without metrics.
-func (c *Client) GetPodMetrics(ctx context.Context, pods []models.PodInfo) error {
+// Never returns an error — callers use the result to assess data availability.
+func (c *Client) GetPodMetrics(ctx context.Context, pods []models.PodInfo) PodMetricsResult {
+	var result PodMetricsResult
+
 	byNS := make(map[string][]int)
 	for i, p := range pods {
 		byNS[p.Namespace] = append(byNS[p.Namespace], i)
@@ -121,7 +130,8 @@ func (c *Client) GetPodMetrics(ctx context.Context, pods []models.PodInfo) error
 			LabelSelector: c.cfg.Labels,
 		})
 		if err != nil {
-			fmt.Printf("warning: metrics-server unavailable for ns %q: %v\n", ns, err)
+			result.Warnings = append(result.Warnings,
+				fmt.Sprintf("metrics-server unavailable for ns %q: %v", ns, err))
 			continue
 		}
 
@@ -133,11 +143,12 @@ func (c *Client) GetPodMetrics(ctx context.Context, pods []models.PodInfo) error
 				if pods[idx].MemoryLimit > 0 {
 					pods[idx].MemoryPercent = float64(m.memoryBytes) / float64(pods[idx].MemoryLimit) * 100
 				}
+				result.Enriched++
 			}
 		}
 	}
 
-	return nil
+	return result
 }
 
 // ProxyGet tunnels an HTTP GET to a pod through the Kubernetes API server proxy.
@@ -201,8 +212,10 @@ func (c *Client) resolveContainer(
 			}
 		}
 		// Requested container not found — fall back to first container.
-		fmt.Printf("warning: container %q not found in pod %s/%s, using %q instead\n",
-			container, namespace, podName, pod.Spec.Containers[0].Name)
+		slog.Warn("container not found, using first container",
+			"requested", container,
+			"pod", namespace+"/"+podName,
+			"using", pod.Spec.Containers[0].Name)
 	}
 
 	return pod.Spec.Containers[0].Name, nil
@@ -247,6 +260,24 @@ func (c *Client) ExecInPod(
 	}
 
 	return &ExecResult{Stdout: stdout.String(), Stderr: stderr.String()}, nil
+}
+
+// ServerVersion returns the Kubernetes server version string.
+func (c *Client) ServerVersion(ctx context.Context) (string, error) {
+	sv, err := c.clientset.Discovery().ServerVersion()
+	if err != nil {
+		return "", fmt.Errorf("server version: %w", err)
+	}
+	return sv.GitVersion, nil
+}
+
+// ProbeMetricsServer checks if the metrics-server API is reachable
+// by attempting to list pod metrics in any namespace.
+func (c *Client) ProbeMetricsServer(ctx context.Context) error {
+	_, err := c.metricsClient.MetricsV1beta1().PodMetricses("").List(ctx, metav1.ListOptions{
+		Limit: 1,
+	})
+	return err
 }
 
 // ListNamespaces returns all namespace names in the cluster.

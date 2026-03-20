@@ -75,10 +75,15 @@ func runSnapshotSave(cmd *cobra.Command, args []string) error {
 
 		for _, pod := range clusterPods {
 			ref := podRef(pod)
-			connectors, err = cc.GetAllConnectors(ctx, ref)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warning: cluster %s via pod %s: %v\n", clusterName, pod.Name, err)
+			result, fetchErr := cc.GetAllConnectors(ctx, ref)
+			if fetchErr != nil {
+				fmt.Fprintf(os.Stderr, "warning: cluster %s via pod %s: %v\n", clusterName, pod.Name, fetchErr)
 				continue
+			}
+			connectors = result.Connectors
+			if result.Errors > 0 {
+				fmt.Fprintf(os.Stderr, "warning: %d/%d connector fetches failed for cluster %s\n",
+					result.Errors, result.Total, clusterName)
 			}
 			queried = true
 			break

@@ -111,7 +111,7 @@ Use `--explain` to show a detailed score breakdown per suspect, including signal
 kc-hunter suspect -n kafka-prod --explain
 ```
 
-**Example output:**
+**Example output (full data):**
 
 ```
 ========================================
@@ -124,6 +124,8 @@ kc-hunter suspect -n kafka-prod --explain
   Failed tasks:        1
   Hottest pod:         connect-worker-3 (7.2Gi/8.0Gi 90.1%, node: node-pool-2a)
   Top suspect:         jdbc-inventory-source/task-0 (score: 75/100)
+  Confidence:          HIGH (9/9 signals evaluable)
+  Data sources:        pod-metrics=yes  connector-metrics=prometheus (84)  connectors=12
 
   1. jdbc-inventory-source / task-0
      Worker: 10.0.5.12:8083 (pod: connect-worker-3)
@@ -133,15 +135,53 @@ kc-hunter suspect -n kafka-prod --explain
        - task state: FAILED
        - high-risk type: JdbcSourceConnector
      Recommendation: investigate failure trace and restart task
-
-  2. s3-archive-sink / task-2
-     Worker: 10.0.5.12:8083 (pod: connect-worker-3)
-     Score:  [#########...........] 45/100
-     Reasons:
-       - assigned to hottest pod connect-worker-3 (90.1% mem)
-       - 8 tasks (threshold: 5)
-     Recommendation: distribute tasks across more workers or reduce tasks.max
 ```
+
+**Example output (partial data — metrics-server unavailable):**
+
+```
+  Confidence:          REDUCED (4/9 signals evaluable)
+  Data sources:        pod-metrics=no  connector-metrics=none  connectors=12
+
+  WARNINGS
+  ! pod metrics unavailable: memory% and hottest-pod signal may be inaccurate
+  ...
+  ----------------------------------------
+  Showing top 5 of 28 tasks | confidence: reduced — interpret scores with caution
+```
+
+#### Resilience and partial collection
+
+The `suspect` command is designed for degraded environments where not everything works:
+
+- **Retries with backoff**: Connect REST queries retry up to 3 times with exponential backoff (1s, 2s, 4s). If the first pod in a cluster is unreachable, subsequent pods are tried.
+- **Per-step timeouts**: Each collection step (pod discovery, pod metrics, Connect REST, connector metrics) gets a bounded fraction of the total timeout, preventing a single slow step from consuming the entire budget.
+- **Partial collection**: If pod metrics, connector metrics, or some connector fetches fail, the command continues with whatever data is available instead of aborting. Missing data is tracked and reported.
+- **Structured warnings**: All collection issues are accumulated and displayed in a dedicated WARNINGS section — never silently swallowed.
+
+#### Confidence levels
+
+Each report includes a confidence assessment based on data completeness:
+
+| Confidence | Meaning | Signals evaluable |
+|------------|---------|-------------------|
+| **HIGH** | All data sources available, no collection errors | 9/9 |
+| **REDUCED** | Some data missing (pod metrics, connector metrics, or partial connector errors) | 3–8/9 |
+| **LOW** | Major data gaps (>50% connector fetch failures, or Connect REST completely unreachable) | varies |
+
+The 9 scoring signals are split into:
+- **4 structural** (always available with Connect REST): `task_failed`, `high_task_count`, `risky_connector_class`, `on_hottest_worker`*
+- **5 metrics-based** (require Prometheus or scrape): `high_poll_time`, `high_put_time`, `high_batch_size`, `high_retry_or_errors`, `high_offset_commit`
+
+\* `on_hottest_worker` technically requires pod metrics (memory%) to determine if a pod is "hot". Without metrics-server, this signal fires based on 0% memory — effectively disabled.
+
+#### How to interpret reduced-confidence scores
+
+- A score of 75 with **high** confidence means the connector/task triggered multiple signals with full data.
+- A score of 75 with **reduced** confidence means the same — but 5 metrics signals could not fire. The actual risk may be higher or lower.
+- A score of 0 with **reduced** confidence does NOT mean "safe" — it means not enough data was available to evaluate most signals.
+
+**Rule of thumb**: when confidence is reduced, focus on the _relative_ ranking rather than _absolute_ scores.
 
 ### `pods` — Infrastructure Overview
 
@@ -226,6 +266,55 @@ kc-hunter snapshot diff before.json after.json
 ```
 
 The diff shows added/removed/changed connectors and suspects, including score deltas and signal changes.
+
+### `doctor` — Validate Prerequisites
+
+Run a sequence of diagnostic checks to verify that kc-hunter can operate correctly in the current environment. Useful as a first step during an incident or when troubleshooting configuration.
+
+```bash
+kc-hunter doctor -n kafka-prod
+```
+
+**Checks performed:**
+
+| # | Check | PASS | WARN | FAIL |
+|---|-------|------|------|------|
+| 1 | `cluster-access` | API server reachable | — | Cannot connect (short-circuits remaining checks) |
+| 2 | `namespaces` | Configured namespace(s) exist | Cannot list namespaces | Namespace not found |
+| 3 | `pod-discovery` | Pods found and ready | Pods found but some not ready | No pods found |
+| 4 | `metrics-server` | metrics-server available | Not available (scoring still works) | — |
+| 5 | `connect-rest` | REST API reachable | — | Unreachable (transport-specific remediation) |
+| 6 | `metrics-provider` | Provider reachable | Provider unreachable | — (SKIP if `--metrics=none`) |
+| 7 | `exec-permissions` | Exec into pods works | Exec denied | — (SKIP if not using exec transport) |
+
+Each failing or warning check includes a **remediation message** with the specific flag or permission to fix.
+
+**Example output:**
+
+```
+kc-hunter doctor — 2026-03-20 14:00:00
+Transport mode: exec
+
+CHECK              STATUS  DURATION  MESSAGE
+-----              ------  --------  -------
+cluster-access     PASS    52ms      connected to Kubernetes v1.28.3
+namespaces         PASS    18ms      namespace(s) exist: kafka-prod
+pod-discovery      PASS    45ms      found 3 pod(s), all ready
+metrics-server     WARN    120ms     metrics-server not available: ...
+connect-rest       PASS    88ms      Connect REST reachable via exec (12 connectors)
+metrics-provider   SKIP    0s        metrics source is 'none'; scoring uses K8s + Connect REST signals only
+exec-permissions   PASS    35ms      exec into pods works
+
+Remediation:
+  [metrics-server] install metrics-server for memory% data; scoring still works without it using Connect REST signals
+
+1 passed, 1 warnings, 0 failed, 1 skipped
+```
+
+**Limitations:**
+- Checks run sequentially; if cluster-access fails, all remaining checks are skipped
+- Connect REST is tested against the first discovered pod only
+- Does not validate Prometheus query correctness — only checks reachability
 
 ### Interactive Mode
 
@@ -313,6 +402,50 @@ Custom patterns can be added via the `scoring.riskyClasses` config. Matching is 
 
 ---
 
+## Testing
+
+The scoring engine — the diagnostic core of kc-hunter — has a comprehensive table-driven test suite covering all 9 signals, score capping, recommendation generation, and edge cases.
+
+```bash
+# Run scoring engine tests
+go test ./internal/scoring/ -v
+
+# Run doctor tests
+go test ./internal/doctor/ -v
+
+# Run all tests
+go test ./...
+
+# Run with race detector
+go test -race ./...
+```
+
+### What is tested
+
+| Area | Coverage |
+|------|----------|
+| Hottest pod selection | Pressure score composite (mem% + proximity + restarts), tie-breaking by bytes, empty input |
+| Pod pressure score | Quadratic proximity curve, clamping at 0/100, restart cap at 5 |
+| Worker mapping | Dual-key IP+name mapping, empty IP handling, unknown worker |
+| Signal: `on_hottest_worker` | Fires above threshold, does NOT fire below 80%, does NOT fire on cold worker |
+| Signal: `task_failed` | FAILED and UNASSIGNED fire; RUNNING and PAUSED do not; trace truncation at 120 chars |
+| Signal: `high_task_count` | Fires at threshold (>= 5), does not fire below |
+| Signal: `risky_connector_class` | Exact match, substring patterns, empty class, safe class |
+| Metrics signals | All 5 metrics signals fire above threshold; none fire below; absent metrics produce no signals |
+| Score capping | Raw total > 100 is capped to exactly 100 |
+| Score additivity | Score equals sum of active signal weights |
+| Custom weights | Overridden weights change scores correctly |
+| Zero weight | Weight of 0 disables score contribution |
+| Recommendations | Low-score fallback, signal-specific advice, combined recommendations, hot-only message |
+| ScoreAll ordering | Results sorted descending by score |
+| Edge cases | No pods, no connectors, unknown workers, multiple tasks per connector |
+| Doctor checks | All 7 check functions: success/failure/edge cases, remediation text, duration recording, colorize callback, report helpers |
+| Resilience | Retry with exponential backoff, context cancellation, step timeout derivation |
+| Confidence | Signal evaluability computation, confidence derivation from collection stats |
+| Coverage output | Formatter renders coverage section, warnings, footer confidence indicator; JSON includes coverage |
+
+---
+
 ## Safety
 
 - **Read-Only** — Only `GET` requests against K8s API and Connect REST. Never modifies cluster state.
@@ -338,7 +471,9 @@ kc-hunter/
 │   ├── metrics/          # Prometheus, scrape, and noop providers
 │   ├── config/           # Defaults and YAML config loading
 │   ├── output/           # Table & JSON formatters (colorized terminal output)
-│   └── snapshot/         # Save/load/diff cluster state snapshots
+│   ├── snapshot/         # Save/load/diff cluster state snapshots
+│   ├── doctor/           # Prerequisite validation checks
+│   └── resilience/       # Retry, backoff, step timeout utilities
 └── pkg/models/           # Shared domain types
 ```
 

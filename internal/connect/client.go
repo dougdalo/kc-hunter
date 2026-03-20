@@ -136,13 +136,25 @@ func (c *Client) GetConnectorConfig(
 	return cfg, nil
 }
 
+// FetchResult holds the outcome of a bulk connector fetch,
+// including partial failure information.
+type FetchResult struct {
+	Connectors []models.ConnectorInfo
+	Warnings   []string // per-connector error messages
+	Total      int      // total connectors attempted
+	Errors     int      // failed connector fetches
+}
+
 // GetAllConnectors fetches status + config for every connector on a cluster.
 // Uses bounded concurrency to handle 870+ connectors without overwhelming
 // the Connect REST API (or the K8s API server when proxying).
-func (c *Client) GetAllConnectors(ctx context.Context, ref PodRef) ([]models.ConnectorInfo, error) {
+//
+// Returns a FetchResult that includes both successful connectors and
+// structured warnings for failures. The caller decides how to report them.
+func (c *Client) GetAllConnectors(ctx context.Context, ref PodRef) (FetchResult, error) {
 	names, err := c.ListConnectors(ctx, ref)
 	if err != nil {
-		return nil, err
+		return FetchResult{}, err
 	}
 
 	type result struct {
@@ -181,23 +193,17 @@ func (c *Client) GetAllConnectors(ctx context.Context, ref PodRef) ([]models.Con
 
 	wg.Wait()
 
-	var connectors []models.ConnectorInfo
-	var warnings int
+	fr := FetchResult{Total: len(names)}
 	for _, r := range results {
 		if r.err != nil {
-			warnings++
-			if warnings <= 5 {
-				fmt.Printf("warning: %v\n", r.err)
-			}
+			fr.Errors++
+			fr.Warnings = append(fr.Warnings, r.err.Error())
 			continue
 		}
-		connectors = append(connectors, r.info)
-	}
-	if warnings > 5 {
-		fmt.Printf("warning: ... and %d more connector fetch errors\n", warnings-5)
+		fr.Connectors = append(fr.Connectors, r.info)
 	}
 
-	return connectors, nil
+	return fr, nil
 }
 
 // --- Transport implementations ---

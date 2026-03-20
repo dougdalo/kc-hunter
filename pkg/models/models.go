@@ -97,14 +97,32 @@ type ScoringSignal struct {
 	Value       string `json:"value,omitempty"`
 }
 
+// CollectionStats tracks what data was successfully collected during a
+// diagnostic run. This enables confidence assessment — a suspect score of 75
+// means something different with 9/9 signals evaluable vs 4/9.
+type CollectionStats struct {
+	PodsDiscovered   int      `json:"podsDiscovered"`
+	PodsWithMetrics  int      `json:"podsWithMetrics"`
+	MetricsSource    string   `json:"metricsSource"`              // "prometheus", "scrape", "none"
+	MetricsCollected int      `json:"metricsCollected"`           // connector/task metrics fetched
+	ConnectorTotal   int      `json:"connectorTotal"`             // total connectors attempted
+	ConnectorErrors  int      `json:"connectorErrors"`            // failed connector fetches
+	TotalTasks       int      `json:"totalTasks"`                 // total tasks scored
+	SignalsEvaluable int      `json:"signalsEvaluable"`           // how many of 9 signals had data
+	Confidence       string   `json:"confidence"`                 // "high", "reduced", "low"
+	Warnings         []string `json:"warnings,omitempty"`         // structured warnings from collection
+	RetryAttempts    int      `json:"retryAttempts,omitempty"`    // total retry attempts across steps
+}
+
 // ClusterDiagnostic is the top-level report for one Kafka Connect cluster.
 type ClusterDiagnostic struct {
-	ClusterName string          `json:"cluster"`
-	Pods        []PodInfo       `json:"pods"`
-	HottestPod  *PodInfo        `json:"hottestPod,omitempty"`
-	Workers     []WorkerInfo    `json:"workers"`
-	Suspects    []SuspectReport `json:"suspects"`
-	CollectedAt time.Time       `json:"collectedAt"`
+	ClusterName string           `json:"cluster"`
+	Pods        []PodInfo        `json:"pods"`
+	HottestPod  *PodInfo         `json:"hottestPod,omitempty"`
+	Workers     []WorkerInfo     `json:"workers"`
+	Suspects    []SuspectReport  `json:"suspects"`
+	Coverage    *CollectionStats `json:"coverage,omitempty"`
+	CollectedAt time.Time        `json:"collectedAt"`
 }
 
 // DiagnosticReport is the full output across all clusters.

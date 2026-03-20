@@ -163,6 +163,41 @@ func (f *Formatter) PrintSuspects(diag models.ClusterDiagnostic, topN int) error
 			c.bold(fmt.Sprintf("%s/task-%d", top.ConnectorName, top.TaskID)),
 			c.scoreColor(top.Score)(fmt.Sprintf("%d/100", top.Score)))
 	}
+
+	// Coverage / confidence section.
+	if cov := diag.Coverage; cov != nil {
+		confidenceStr := cov.Confidence
+		switch cov.Confidence {
+		case "high":
+			confidenceStr = c.boldGreen("HIGH")
+		case "reduced":
+			confidenceStr = c.boldYellow("REDUCED")
+		case "low":
+			confidenceStr = c.boldRed("LOW")
+		}
+		fmt.Fprintf(f.w, "  Confidence:          %s (%d/9 signals evaluable)\n",
+			confidenceStr, cov.SignalsEvaluable)
+
+		// Show data source summary on one line.
+		podMetrics := c.boldGreen("yes")
+		if cov.PodsWithMetrics == 0 {
+			podMetrics = c.boldRed("no")
+		}
+		metricsProvider := c.dim("none")
+		if cov.MetricsSource != "none" {
+			if cov.MetricsCollected > 0 {
+				metricsProvider = c.boldGreen(fmt.Sprintf("%s (%d)", cov.MetricsSource, cov.MetricsCollected))
+			} else {
+				metricsProvider = c.boldRed(cov.MetricsSource + " (unreachable)")
+			}
+		}
+		connErr := ""
+		if cov.ConnectorErrors > 0 {
+			connErr = c.boldYellow(fmt.Sprintf(" (%d errors)", cov.ConnectorErrors))
+		}
+		fmt.Fprintf(f.w, "  Data sources:        pod-metrics=%s  connector-metrics=%s  connectors=%d%s\n",
+			podMetrics, metricsProvider, cov.ConnectorTotal-cov.ConnectorErrors, connErr)
+	}
 	fmt.Fprintln(f.w)
 
 	// --- Suspect List ---
@@ -199,9 +234,22 @@ func (f *Formatter) PrintSuspects(diag models.ClusterDiagnostic, topN int) error
 		fmt.Fprintln(f.w)
 	}
 
+	// --- Warnings ---
+	if cov := diag.Coverage; cov != nil && len(cov.Warnings) > 0 {
+		fmt.Fprintf(f.w, "  %s\n", c.boldYellow("WARNINGS"))
+		for _, w := range cov.Warnings {
+			fmt.Fprintf(f.w, "  %s %s\n", c.yellow("!"), w)
+		}
+		fmt.Fprintln(f.w)
+	}
+
 	// --- Footer ---
 	fmt.Fprintf(f.w, "%s\n", c.dim("----------------------------------------"))
-	fmt.Fprintf(f.w, "%s\n", c.dim(fmt.Sprintf("Showing top %d of %d tasks", len(suspects), len(diag.Suspects))))
+	footer := fmt.Sprintf("Showing top %d of %d tasks", len(suspects), len(diag.Suspects))
+	if cov := diag.Coverage; cov != nil && cov.Confidence != "high" {
+		footer += fmt.Sprintf(" | confidence: %s — interpret scores with caution", cov.Confidence)
+	}
+	fmt.Fprintf(f.w, "%s\n", c.dim(footer))
 
 	return nil
 }
@@ -391,6 +439,28 @@ func (f *Formatter) PrintDiff(diff models.DiffReport) error {
 	}
 
 	return nil
+}
+
+// DoctorColorize returns a function that colorizes a status string.
+// Returns nil when color is disabled (non-TTY or JSON mode).
+func (f *Formatter) DoctorColorize() func(statusStr string, text string) string {
+	if !f.c.enabled {
+		return nil
+	}
+	return func(statusStr string, text string) string {
+		switch statusStr {
+		case "PASS":
+			return f.c.boldGreen(text)
+		case "WARN":
+			return f.c.boldYellow(text)
+		case "FAIL":
+			return f.c.boldRed(text)
+		case "SKIP":
+			return f.c.dim(text)
+		default:
+			return text
+		}
+	}
 }
 
 func (f *Formatter) json(v interface{}) error {

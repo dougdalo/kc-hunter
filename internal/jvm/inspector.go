@@ -31,6 +31,7 @@ type Result struct {
 	ThreadCount       int                   `json:"threadCount"`
 	GCInfo            string                `json:"gcInfo,omitempty"`
 	SuspiciousClasses []string              `json:"suspiciousClasses,omitempty"`
+	Warnings          []string              `json:"warnings,omitempty"`
 	RawOutput         map[string]string     `json:"-"`
 }
 

@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"os"
 
 	"github.com/dougdalo/kc-hunter/internal/connect"
 	"github.com/dougdalo/kc-hunter/internal/discovery"
@@ -57,13 +58,17 @@ func fetchAllConnectors(
 
 		ref := podRef(pod)
 
-		connectors, err := cc.GetAllConnectors(ctx, ref)
+		result, err := cc.GetAllConnectors(ctx, ref)
 		if err != nil {
 			fmt.Printf("warning: cluster %s via pod %s: %v\n", cluster, pod.Name, err)
 			continue
 		}
+		if result.Errors > 0 {
+			fmt.Fprintf(os.Stderr, "warning: %d/%d connector fetches failed for cluster %s\n",
+				result.Errors, result.Total, cluster)
+		}
 
-		all = append(all, connectors...)
+		all = append(all, result.Connectors...)
 		queried[cluster] = true
 	}
 

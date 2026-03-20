@@ -5,6 +5,7 @@ package app
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"time"
 
@@ -21,6 +22,7 @@ import (
 var (
 	cfg        *config.Config
 	configPath string
+	debugMode  bool
 )
 
 var rootCmd = &cobra.Command{
@@ -77,6 +79,8 @@ func init() {
 		cfg.UseProxy, "route Connect REST calls through K8s API server proxy instead of exec")
 	f.BoolVar(&cfg.Explain, "explain",
 		false, "show detailed score breakdown for each suspect")
+	f.BoolVar(&debugMode, "debug",
+		false, "enable debug logging to stderr")
 
 	rootCmd.AddCommand(podsCmd)
 	rootCmd.AddCommand(workersCmd)
@@ -86,6 +90,7 @@ func init() {
 	rootCmd.AddCommand(inspectConnectorCmd)
 	rootCmd.AddCommand(deepInspectCmd)
 	rootCmd.AddCommand(snapshotCmd)
+	rootCmd.AddCommand(doctorCmd)
 }
 
 // loadConfigFile implements merge priority: defaults < config file < flags.
@@ -95,6 +100,8 @@ func init() {
 //
 // Validation always runs — it catches bad flag values even without a config file.
 func loadConfigFile(cmd *cobra.Command, args []string) error {
+	initLogger(debugMode)
+
 	if configPath != "" {
 		// When the user explicitly passes --config, the file must exist.
 		if _, err := os.Stat(configPath); err != nil {
@@ -165,6 +172,27 @@ func Execute() error {
 	return rootCmd.Execute()
 }
 
+// initLogger configures the global slog logger.
+// Default: warnings only. --debug: all levels including debug.
+// Output goes to stderr so it never mixes with data on stdout.
+func initLogger(debug bool) {
+	level := slog.LevelWarn
+	if debug {
+		level = slog.LevelDebug
+	}
+	h := slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: level,
+		// Strip timestamp — noisy for a CLI tool.
+		ReplaceAttr: func(_ []string, a slog.Attr) slog.Attr {
+			if a.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return a
+		},
+	})
+	slog.SetDefault(slog.New(h))
+}
+
 // --- shared helpers used by multiple commands ---
 
 func newK8sClient() (*k8s.Client, error) {
@@ -178,12 +206,15 @@ func newK8sClient() (*k8s.Client, error) {
 func newConnectClient(k8sClient *k8s.Client) *connect.Client {
 	var transport connect.Transport
 
-	if cfg.UseProxy {
+	switch {
+	case cfg.UseProxy:
+		slog.Debug("transport: proxy via K8s API server")
 		transport = connect.NewProxyTransport(k8sClient.ProxyGet, cfg.ConnectPort)
-	} else if len(cfg.ConnectURLs) > 0 {
+	case len(cfg.ConnectURLs) > 0:
+		slog.Debug("transport: direct HTTP", "urls", cfg.ConnectURLs)
 		transport = connect.NewDirectTransport(cfg.Timeout)
-	} else {
-		// Default: exec-based transport — works everywhere including GKE.
+	default:
+		slog.Debug("transport: exec into pods")
 		adapter := &execAdapter{client: k8sClient}
 		transport = connect.NewExecTransport(adapter.exec, cfg.ConnectPort, "")
 	}
@@ -227,8 +258,7 @@ func newMetricsProvider() metrics.Provider {
 	switch cfg.MetricsSource {
 	case "prometheus":
 		if cfg.PrometheusURL == "" {
-			fmt.Fprintln(os.Stderr,
-			"warning: --prometheus-url required for prometheus metrics source, falling back to none")
+			slog.Warn("--prometheus-url required for prometheus metrics source, falling back to none")
 			return metrics.NewNoopProvider()
 		}
 		return metrics.NewPrometheusProvider(cfg.PrometheusURL, cfg.Timeout)
