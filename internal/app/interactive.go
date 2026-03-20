@@ -110,7 +110,9 @@ func runInteractive() error {
 }
 
 // discoverPodsInNamespace finds Kafka Connect pods in the given namespace.
-func discoverPodsInNamespace(ctx context.Context, k8sClient interface{ DiscoverConnectPods(context.Context) ([]models.PodInfo, error) }, namespace string) ([]models.PodInfo, error) {
+func discoverPodsInNamespace(ctx context.Context, k8sClient interface {
+	DiscoverConnectPods(context.Context) ([]models.PodInfo, error)
+}, namespace string) ([]models.PodInfo, error) {
 	allPods, err := k8sClient.DiscoverConnectPods(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("discover pods: %w", err)

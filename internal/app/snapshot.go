@@ -8,25 +8,44 @@ import (
 	"time"
 
 	"github.com/dougdalo/kc-hunter/internal/discovery"
+	"github.com/dougdalo/kc-hunter/internal/snapshot"
 	"github.com/dougdalo/kc-hunter/pkg/models"
 	"github.com/spf13/cobra"
 )
 
-var suspectCmd = &cobra.Command{
-	Use:   "suspect",
-	Short: "Rank connectors by suspicion of causing memory pressure",
-	Long: `The main diagnostic command. Correlates pod memory usage, connector/task
-state, and optional Prometheus/JMX metrics to produce a ranked suspect report.
+var snapshotOutputFile string
 
-Works even without Prometheus — falls back to K8s + Connect REST signals.`,
-	RunE: runSuspect,
+var snapshotCmd = &cobra.Command{
+	Use:   "snapshot",
+	Short: "Save and compare cluster state snapshots",
 }
 
-func runSuspect(cmd *cobra.Command, args []string) error {
+var snapshotSaveCmd = &cobra.Command{
+	Use:   "save",
+	Short: "Capture current cluster state to a JSON file",
+	RunE:  runSnapshotSave,
+}
+
+var snapshotDiffCmd = &cobra.Command{
+	Use:   "diff <before.json> <after.json>",
+	Short: "Compare two snapshots and show what changed",
+	Args:  cobra.ExactArgs(2),
+	RunE:  runSnapshotDiff,
+}
+
+func init() {
+	snapshotSaveCmd.Flags().StringVarP(&snapshotOutputFile, "output-file", "O",
+		"", "output file path (required)")
+	_ = snapshotSaveCmd.MarkFlagRequired("output-file")
+
+	snapshotCmd.AddCommand(snapshotSaveCmd)
+	snapshotCmd.AddCommand(snapshotDiffCmd)
+}
+
+func runSnapshotSave(cmd *cobra.Command, args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), suspectTimeout())
 	defer cancel()
 
-	// 1. Discover pods
 	k, err := newK8sClient()
 	if err != nil {
 		return err
@@ -37,31 +56,25 @@ func runSuspect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("discover pods: %w", err)
 	}
 	if len(pods) == 0 {
-		fmt.Println("No Kafka Connect pods found.")
-		return nil
+		return fmt.Errorf("no Kafka Connect pods found")
 	}
 
-	// 2. Pod metrics (best-effort)
 	_ = k.GetPodMetrics(ctx, pods)
 
-	// 3. Group by Strimzi cluster
 	clusters := discovery.GroupPodsByClusters(pods)
 
-	// 4. Set up providers
 	mp := newMetricsProvider()
 	cc := newConnectClient(k)
 	se := newScoringEngine()
-	fmtr := newFormatter()
 
-	// 5. Analyze each cluster independently
+	var diags []models.ClusterDiagnostic
+
 	for clusterName, clusterPods := range clusters {
 		var connectors []models.ConnectorInfo
 		queried := false
 
-		// Query one pod per cluster — Connect REST returns cluster-wide state
 		for _, pod := range clusterPods {
 			ref := podRef(pod)
-
 			connectors, err = cc.GetAllConnectors(ctx, ref)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "warning: cluster %s via pod %s: %v\n", clusterName, pod.Name, err)
@@ -75,7 +88,6 @@ func runSuspect(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		// Collect metrics if provider is available
 		allMetrics := make(map[string]*models.ConnectorMetrics)
 		if mp.Available(ctx) {
 			for _, pod := range clusterPods {
@@ -89,11 +101,8 @@ func runSuspect(cmd *cobra.Command, args []string) error {
 			}
 		}
 
-		// Score all tasks
 		suspects := se.ScoreAll(clusterPods, connectors, allMetrics)
 
-		// Find hottest pod — sort by memory percent (primary), then
-		// absolute usage (tie-breaker), matching the scoring engine logic.
 		sort.Slice(clusterPods, func(i, j int) bool {
 			if clusterPods[i].MemoryPercent != clusterPods[j].MemoryPercent {
 				return clusterPods[i].MemoryPercent > clusterPods[j].MemoryPercent
@@ -105,19 +114,49 @@ func runSuspect(cmd *cobra.Command, args []string) error {
 			hottest = &clusterPods[0]
 		}
 
-		diag := models.ClusterDiagnostic{
+		diags = append(diags, models.ClusterDiagnostic{
 			ClusterName: clusterName,
 			Pods:        clusterPods,
 			HottestPod:  hottest,
 			Workers:     discovery.BuildWorkers(clusterPods, connectors, cfg.ConnectPort),
 			Suspects:    suspects,
 			CollectedAt: time.Now(),
-		}
-
-		if err := fmtr.PrintSuspects(diag, cfg.TopN); err != nil {
-			return err
-		}
+		})
 	}
 
+	if len(diags) == 0 {
+		return fmt.Errorf("no cluster data collected")
+	}
+
+	snap := snapshot.BuildSnapshot(diags)
+	if err := snapshot.Save(snap, snapshotOutputFile); err != nil {
+		return err
+	}
+
+	fmt.Fprintf(os.Stderr, "Snapshot saved to %s (%d clusters, %d connectors)\n",
+		snapshotOutputFile, len(snap.Clusters), countConnectors(snap))
 	return nil
+}
+
+func runSnapshotDiff(cmd *cobra.Command, args []string) error {
+	before, err := snapshot.Load(args[0])
+	if err != nil {
+		return err
+	}
+	after, err := snapshot.Load(args[1])
+	if err != nil {
+		return err
+	}
+
+	diff := snapshot.Diff(before, after)
+	fmtr := newFormatter()
+	return fmtr.PrintDiff(diff)
+}
+
+func countConnectors(snap models.Snapshot) int {
+	n := 0
+	for _, c := range snap.Clusters {
+		n += len(c.Connectors)
+	}
+	return n
 }

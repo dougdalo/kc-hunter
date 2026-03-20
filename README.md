@@ -32,7 +32,7 @@ When you run **many connectors** across a Strimzi Kafka Connect cluster, the JVM
 ### Build from source
 
 ```bash
-git clone https://github.com/dougdalo/kc-hunter.git
+git clone git@github.com:dougdalo/kc-hunter.git
 cd kc-hunter
 go build -o bin/kc-hunter ./cmd/kc-hunter/
 ```
@@ -50,23 +50,23 @@ The resulting binary is fully static with no `glibc` dependency — copy it to a
 
 ```bash
 # Interactive wizard (no arguments)
-./kc-hunter
+./bin/kc-hunter
 
-# Direct CLI
-./kc-hunter suspect -n kafka-prod --top 5
+# Direct CLI — rank suspects in a namespace
+./bin/kc-hunter suspect -n kafka-prod --top 5
 ```
 
 ---
 
 ## Execution Modes
 
-kc-hunter supports three transport modes for reaching the Kafka Connect REST API. The mode determines how HTTP requests are routed to Connect pods.
+kc-hunter supports three transport modes for reaching the Kafka Connect REST API.
 
 | Mode | Flag | How it works | When to use |
 |------|------|-------------|-------------|
-| **exec** (default) | *(none)* | Runs `curl`/`wget` inside pods via K8s SPDY exec, hitting `localhost:8083` | Works everywhere. Best for GKE and environments with pod network restrictions. Requires exec permissions on pods. |
-| **proxy** | `--use-proxy` | Routes through the K8s API server proxy: `GET /api/v1/namespaces/{ns}/pods/{pod}:8083/proxy/...` | Bastion hosts that can reach the API server but not pod IPs (10.x.x.x). No exec permissions needed. |
-| **direct** | `--connect-url http://host:8083` | Sends HTTP requests directly to the provided URL(s) | In-cluster clients or environments where pod IPs are routable. Fastest option. |
+| **exec** *(default)* | *(none)* | Runs `curl`/`wget` inside pods via `kubectl exec`, hitting `localhost:8083` | Works everywhere including GKE. Requires exec permissions on pods. |
+| **proxy** | `--use-proxy` | Routes through the K8s API server proxy (`/api/v1/.../pods/{pod}:8083/proxy/...`) | Bastion hosts that can reach the API server but not pod IPs. No exec permissions needed. |
+| **direct** | `--connect-url <url>` | Sends HTTP requests directly to the provided URL(s) | In-cluster clients or environments where pod IPs are routable. Fastest option. |
 
 ### Mode selection logic
 
@@ -99,43 +99,63 @@ The primary diagnostic command. Correlates Pod metrics with connector/task topol
 
 ```bash
 kc-hunter suspect -n kafka-prod --top 5
-kc-hunter suspect -n kafka-prod -n kafka-staging -o json
+kc-hunter suspect -n kafka-prod -o json
 kc-hunter suspect -n kafka-prod --metrics prometheus --prometheus-url http://prometheus:9090
 ```
 
 Works even without Prometheus — falls back to K8s + Connect REST signals.
 
+Use `--explain` to show a detailed score breakdown per suspect, including signal weights, thresholds, and observed values.
+
+```bash
+kc-hunter suspect -n kafka-prod --explain
+```
+
 **Example output:**
 
 ```
-Hottest Pod: connect-worker-3  (Memory: 7.2Gi / 8.0Gi = 90.1%)
+========================================
+ SUSPECT REPORT: my-cluster
+========================================
 
-  #   CONNECTOR                    TASK  WORKER               POD                SCORE  REASONS
-  1   jdbc-inventory-source        0     10.0.5.12:8083       connect-worker-3   75     ########### .....
-      → assigned to hottest pod connect-worker-3 (90.1% mem)
-      → task state: FAILED
-      → risky connector class: JdbcSourceConnector
-      Recommendation: investigate failure trace and restart task
+  SUMMARY
+  Connectors analyzed: 12
+  Tasks analyzed:      28
+  Failed tasks:        1
+  Hottest pod:         connect-worker-3 (7.2Gi/8.0Gi 90.1%, node: node-pool-2a)
+  Top suspect:         jdbc-inventory-source/task-0 (score: 75/100)
 
-  2   s3-archive-sink              2     10.0.5.12:8083       connect-worker-3   45     ######..........
-      → assigned to hottest pod connect-worker-3 (90.1% mem)
-      → connector has 8 tasks (high task count)
-      Recommendation: check sink backpressure; tune batch.size or add sink capacity
+  1. jdbc-inventory-source / task-0
+     Worker: 10.0.5.12:8083 (pod: connect-worker-3)
+     Score:  [###############.....] 75/100
+     Reasons:
+       - assigned to hottest pod connect-worker-3 (90.1% mem)
+       - task state: FAILED
+       - high-risk type: JdbcSourceConnector
+     Recommendation: investigate failure trace and restart task
+
+  2. s3-archive-sink / task-2
+     Worker: 10.0.5.12:8083 (pod: connect-worker-3)
+     Score:  [#########...........] 45/100
+     Reasons:
+       - assigned to hottest pod connect-worker-3 (90.1% mem)
+       - 8 tasks (threshold: 5)
+     Recommendation: distribute tasks across more workers or reduce tasks.max
 ```
 
 ### `pods` — Infrastructure Overview
 
-List Connect pods ranked by memory pressure:
+List Connect pods with resource usage:
 
 ```bash
 kc-hunter pods -n kafka-prod
 ```
 
 ```
-  POD                   CLUSTER         NODE              MEM USED   MEM LIMIT   MEM%    CPU(m)  READY  RESTARTS
-  connect-worker-3      my-cluster      node-pool-2a      7.2Gi      8.0Gi       90.1%   1250    true   0
-  connect-worker-1      my-cluster      node-pool-1b      5.8Gi      8.0Gi       72.5%   980     true   0
-  connect-worker-0      my-cluster      node-pool-1a      4.1Gi      8.0Gi       51.2%   720     true   2
+POD                   CLUSTER         NODE              MEM USED   MEM LIMIT   MEM%    CPU(m)  READY  RESTARTS
+connect-worker-3      my-cluster      node-pool-2a      7.2Gi      8.0Gi       90.1%   1250    true   0
+connect-worker-1      my-cluster      node-pool-1b      5.8Gi      8.0Gi       72.5%   980     true   0
+connect-worker-0      my-cluster      node-pool-1a      4.1Gi      8.0Gi       51.2%   720     true   2
 ```
 
 ### `workers` — Task Distribution Map
@@ -148,22 +168,22 @@ kc-hunter workers -n kafka-prod
 
 ### `connectors` — Connector Inventory
 
-List all connectors with state and class information:
+List all connectors with state and class:
 
 ```bash
 kc-hunter connectors -n kafka-prod
 ```
 
 ```
-  CONNECTOR                    TYPE    STATE     TASKS  WORKER            CLASS
-  jdbc-inventory-source        source  FAILED    1      10.0.5.12:8083   JdbcSourceConnector
-  s3-archive-sink              sink    RUNNING   8      10.0.5.12:8083   S3SinkConnector
-  debezium-orders-cdc          source  RUNNING   3      10.0.5.14:8083   PostgresConnector
+CONNECTOR                    TYPE    STATE     TASKS              WORKER            CLASS
+jdbc-inventory-source        source  FAILED    1 FAILED           10.0.5.12:8083    JdbcSourceConnector
+s3-archive-sink              sink    RUNNING   8 RUNNING          10.0.5.12:8083    S3SinkConnector
+debezium-orders-cdc          source  RUNNING   3 RUNNING          10.0.5.14:8083    PostgresConnector
 ```
 
 ### `deep-inspect` — JVM Diagnostics
 
-Execute `jcmd` inside pods via K8s SPDY exec to collect heap, thread, and GC data:
+Execute `jcmd` inside pods via K8s exec to collect heap, thread, and GC data:
 
 ```bash
 # Single pod
@@ -176,7 +196,7 @@ kc-hunter deep-inspect -n kafka-prod
 kc-hunter deep-inspect connect-worker-3 -c my-container
 ```
 
-Returns: heap summary, class histogram, thread count, GC info, and suspicious classes matching Kafka Connect patterns.
+Returns heap summary, class histogram, thread count, GC info, and suspicious classes matching known Kafka Connect patterns.
 
 ### `inspect-worker` / `inspect-connector` — Targeted Detail
 
@@ -189,28 +209,60 @@ kc-hunter inspect-worker connect-worker-3
 kc-hunter inspect-connector jdbc-inventory-source
 ```
 
+### `snapshot save` / `snapshot diff` — Incident Comparison
+
+Capture cluster state at a point in time and compare two snapshots to see what changed.
+
+```bash
+# Save current state
+kc-hunter snapshot save -O before.json -n kafka-prod
+
+# ... time passes, incident occurs ...
+
+kc-hunter snapshot save -O after.json -n kafka-prod
+
+# Compare
+kc-hunter snapshot diff before.json after.json
+```
+
+The diff shows added/removed/changed connectors and suspects, including score deltas and signal changes.
+
 ### Interactive Mode
 
 Running `kc-hunter` without arguments launches a guided wizard:
 
-1. **Action** — Choose between Suspect Report, Pod Overview, Worker Map, or Deep JVM Inspect
-2. **Namespace** — Dynamically fetches all namespaces from the cluster
+1. **Action** — Suspect Report, Pod Overview, Worker Map, or Deep JVM Inspect
+2. **Namespace** — Dynamically fetched from the cluster
 3. **Pod** *(deep-inspect only)* — Pick a specific pod or inspect all
 
 ---
 
 ## Configuration
 
+### Config File
+
+All settings can be defined in a YAML file and loaded with `--config`:
+
+```bash
+kc-hunter --config config.yaml suspect -n kafka-prod
+```
+
+See [`config.example.yaml`](config.example.yaml) for a fully documented template.
+
+**Merge priority:** defaults < config file < CLI flags.
+
 ### Global Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `-n, --namespace` | all namespaces | Target namespace(s) — repeatable |
+| `--config` | — | Path to config file (YAML) |
+| `-n, --namespace` | *(all namespaces)* | Target namespace(s) — repeatable |
 | `-l, --selector` | `strimzi.io/kind=KafkaConnect` | Label selector for Connect pods |
 | `-o, --output` | `table` | Output format: `table` or `json` |
 | `--timeout` | `30s` | Per-request timeout |
 | `--top` | `10` | Number of top suspects to display |
 | `--concurrency` | `10` | Max parallel Connect REST requests |
+| `--explain` | `false` | Show detailed score breakdown per suspect |
 | `--use-proxy` | `false` | Route through K8s API server proxy |
 | `--connect-url` | *(auto-discovered)* | Explicit Connect REST URL(s) |
 | `--connect-port` | `8083` | Kafka Connect REST API port |
@@ -236,7 +288,7 @@ The scoring engine evaluates 9 weighted signals per connector task. Scores are c
 
 | Signal | Weight | Fires when |
 |--------|--------|------------|
-| `on_hottest_worker` | 25 | Task runs on the pod with highest memory usage |
+| `on_hottest_worker` | 25 | Task runs on the pod with highest memory pressure (>= 80% mem) |
 | `task_failed` | 20 | Task state is `FAILED` or `UNASSIGNED` |
 | `high_retry_or_errors` | 15 | Retry count > 10 or error rate > 0 |
 | `high_poll_time` | 10 | Source connector poll latency > 5000ms |
@@ -246,6 +298,8 @@ The scoring engine evaluates 9 weighted signals per connector task. Scores are c
 | `risky_connector_class` | 5 | Known high-memory connector type |
 | `high_offset_commit` | 5 | Offset commit avg > 10,000ms |
 
+All thresholds and weights are configurable via config file or `config.example.yaml`.
+
 ### Known Risky Connector Classes
 
 - `JdbcSourceConnector` / `JdbcSinkConnector`
@@ -254,6 +308,8 @@ The scoring engine evaluates 9 weighted signals per connector task. Scores are c
 - `ElasticsearchSinkConnector`
 - `CamelFtpSourceConnector`
 - `FileStreamSourceConnector`
+
+Custom patterns can be added via the `scoring.riskyClasses` config. Matching is done by substring, so `"io.debezium"` matches all Debezium connectors.
 
 ---
 
@@ -281,7 +337,8 @@ kc-hunter/
 │   ├── jvm/              # jcmd execution, heap parsing
 │   ├── metrics/          # Prometheus, scrape, and noop providers
 │   ├── config/           # Defaults and YAML config loading
-│   └── output/           # Table & JSON formatters
+│   ├── output/           # Table & JSON formatters (colorized terminal output)
+│   └── snapshot/         # Save/load/diff cluster state snapshots
 └── pkg/models/           # Shared domain types
 ```
 

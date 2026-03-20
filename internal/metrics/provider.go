@@ -12,7 +12,9 @@ import (
 // Provider is the interface for fetching connector-level metrics.
 type Provider interface {
 	// GetConnectorMetrics returns metrics for a specific connector/task.
-	GetConnectorMetrics(ctx context.Context, connectorName string, taskID int) (*models.ConnectorMetrics, error)
+	GetConnectorMetrics(
+		ctx context.Context, connectorName string, taskID int,
+	) (*models.ConnectorMetrics, error)
 
 	// GetAllMetrics returns all connector metrics reachable from a pod URL.
 	// Key format: "connector-name/taskID"

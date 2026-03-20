@@ -87,7 +87,9 @@ func (c *Client) ListConnectors(ctx context.Context, ref PodRef) ([]string, erro
 }
 
 // GetConnectorStatus returns status including all task states.
-func (c *Client) GetConnectorStatus(ctx context.Context, ref PodRef, name string) (*models.ConnectorInfo, error) {
+func (c *Client) GetConnectorStatus(
+	ctx context.Context, ref PodRef, name string,
+) (*models.ConnectorInfo, error) {
 	body, err := c.transport.Get(ctx, ref, fmt.Sprintf("/connectors/%s/status", name))
 	if err != nil {
 		return nil, err
@@ -120,7 +122,9 @@ func (c *Client) GetConnectorStatus(ctx context.Context, ref PodRef, name string
 }
 
 // GetConnectorConfig returns the configuration of a connector.
-func (c *Client) GetConnectorConfig(ctx context.Context, ref PodRef, name string) (map[string]string, error) {
+func (c *Client) GetConnectorConfig(
+	ctx context.Context, ref PodRef, name string,
+) (map[string]string, error) {
 	body, err := c.transport.Get(ctx, ref, fmt.Sprintf("/connectors/%s/config", name))
 	if err != nil {
 		return nil, err
@@ -238,7 +242,8 @@ func (d *DirectTransport) Get(ctx context.Context, ref PodRef, path string) ([]b
 // Use from bastion hosts that cannot reach pod IPs (10.x.x.x).
 //
 // Each request becomes:
-//   GET /api/v1/namespaces/{ns}/pods/{pod}:{port}/proxy/{path}
+//
+//	GET /api/v1/namespaces/{ns}/pods/{pod}:{port}/proxy/{path}
 //
 // The API server forwards the request to the pod.
 type ProxyTransport struct {
@@ -248,7 +253,12 @@ type ProxyTransport struct {
 
 // ProxyGetFunc is the signature of k8s.Client.ProxyGet, extracted as a
 // function type to avoid a direct dependency from connect -> k8s.
-type ProxyGetFunc func(ctx context.Context, namespace, podName string, port int, path string) ([]byte, error)
+type ProxyGetFunc func(
+	ctx context.Context,
+	namespace, podName string,
+	port int,
+	path string,
+) ([]byte, error)
 
 // NewProxyTransport creates a transport that uses the K8s API proxy.
 func NewProxyTransport(proxyGet ProxyGetFunc, connectPort int) *ProxyTransport {
@@ -275,7 +285,11 @@ func (p *ProxyTransport) Get(ctx context.Context, ref PodRef, path string) ([]by
 
 // ExecFunc is the signature for executing a command inside a pod, extracted
 // as a function type to avoid a direct dependency from connect -> k8s.
-type ExecFunc func(ctx context.Context, namespace, podName, container string, command []string) (stdout, stderr string, err error)
+type ExecFunc func(
+	ctx context.Context,
+	namespace, podName, container string,
+	command []string,
+) (stdout, stderr string, err error)
 
 // ExecTransport runs curl/wget inside the pod via kubectl exec to reach the
 // Connect REST API on localhost. This bypasses all networking/routing issues
@@ -308,7 +322,9 @@ func (e *ExecTransport) Get(ctx context.Context, ref PodRef, path string) ([]byt
 		[]string{"curl", "-s", url})
 	if err != nil {
 		// Fallback: curl may not exist; try wget.
-		if strings.Contains(stderr, "not found") || strings.Contains(err.Error(), "executable file not found") {
+		notFound := strings.Contains(stderr, "not found") ||
+			strings.Contains(err.Error(), "executable file not found")
+		if notFound {
 			stdout, stderr, err = e.execFn(ctx, ref.Namespace, ref.Name, e.container,
 				[]string{"wget", "-qO-", url})
 			if err != nil {

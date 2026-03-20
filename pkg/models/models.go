@@ -9,7 +9,7 @@ type PodInfo struct {
 	Name          string            `json:"name"`
 	Namespace     string            `json:"namespace"`
 	NodeName      string            `json:"node"`
-	ClusterName   string            `json:"cluster"`    // strimzi.io/cluster label
+	ClusterName   string            `json:"cluster"`     // strimzi.io/cluster label
 	MemoryUsage   int64             `json:"memoryUsage"` // bytes, from metrics-server
 	MemoryLimit   int64             `json:"memoryLimit"` // bytes, from pod spec
 	MemoryPercent float64           `json:"memoryPercent"`
@@ -24,10 +24,10 @@ type PodInfo struct {
 // ConnectorInfo holds the state of a Kafka Connect connector.
 type ConnectorInfo struct {
 	Name       string            `json:"name"`
-	Type       string            `json:"type"`      // "source" or "sink"
-	State      string            `json:"state"`     // RUNNING, PAUSED, FAILED, UNASSIGNED
+	Type       string            `json:"type"`  // "source" or "sink"
+	State      string            `json:"state"` // RUNNING, PAUSED, FAILED, UNASSIGNED
 	WorkerID   string            `json:"workerID"`
-	Config     map[string]string `json:"-"`         // omit full config from default JSON
+	Config     map[string]string `json:"-"` // omit full config from default JSON
 	Tasks      []TaskInfo        `json:"tasks"`
 	ClassName  string            `json:"class"`
 	ClusterURL string            `json:"clusterURL"`
@@ -37,7 +37,7 @@ type ConnectorInfo struct {
 type TaskInfo struct {
 	ConnectorName string `json:"connector"`
 	TaskID        int    `json:"taskID"`
-	State         string `json:"state"`    // RUNNING, FAILED, UNASSIGNED
+	State         string `json:"state"` // RUNNING, FAILED, UNASSIGNED
 	WorkerID      string `json:"workerID"`
 	Trace         string `json:"trace,omitempty"`
 }
@@ -99,16 +99,72 @@ type ScoringSignal struct {
 
 // ClusterDiagnostic is the top-level report for one Kafka Connect cluster.
 type ClusterDiagnostic struct {
-	ClusterName string       `json:"cluster"`
-	Pods        []PodInfo    `json:"pods"`
-	HottestPod  *PodInfo     `json:"hottestPod,omitempty"`
-	Workers     []WorkerInfo `json:"workers"`
+	ClusterName string          `json:"cluster"`
+	Pods        []PodInfo       `json:"pods"`
+	HottestPod  *PodInfo        `json:"hottestPod,omitempty"`
+	Workers     []WorkerInfo    `json:"workers"`
 	Suspects    []SuspectReport `json:"suspects"`
-	CollectedAt time.Time    `json:"collectedAt"`
+	CollectedAt time.Time       `json:"collectedAt"`
 }
 
 // DiagnosticReport is the full output across all clusters.
 type DiagnosticReport struct {
 	Clusters    []ClusterDiagnostic `json:"clusters"`
 	CollectedAt time.Time           `json:"collectedAt"`
+}
+
+// Snapshot captures cluster state at a point in time for later comparison.
+type Snapshot struct {
+	Version     string              `json:"version"`
+	CollectedAt time.Time           `json:"collectedAt"`
+	Clusters    []ClusterSnapshot   `json:"clusters"`
+}
+
+// ClusterSnapshot captures one cluster's connectors and suspect scores.
+type ClusterSnapshot struct {
+	ClusterName string              `json:"cluster"`
+	Connectors  []ConnectorSnapshot `json:"connectors"`
+	Suspects    []SuspectReport     `json:"suspects"`
+}
+
+// ConnectorSnapshot captures connector state for diffing.
+type ConnectorSnapshot struct {
+	Name      string `json:"name"`
+	Type      string `json:"type"`
+	State     string `json:"state"`
+	ClassName string `json:"class"`
+	TaskCount int    `json:"taskCount"`
+}
+
+// DiffReport holds the result of comparing two snapshots.
+type DiffReport struct {
+	BeforeTime time.Time          `json:"beforeTime"`
+	AfterTime  time.Time          `json:"afterTime"`
+	Clusters   []ClusterDiffReport `json:"clusters"`
+}
+
+// ClusterDiffReport holds diff results for a single cluster.
+type ClusterDiffReport struct {
+	ClusterName       string            `json:"cluster"`
+	AddedConnectors   []ConnectorSnapshot `json:"addedConnectors,omitempty"`
+	RemovedConnectors []ConnectorSnapshot `json:"removedConnectors,omitempty"`
+	ChangedConnectors []ConnectorChange   `json:"changedConnectors,omitempty"`
+	AddedSuspects     []SuspectReport     `json:"addedSuspects,omitempty"`
+	RemovedSuspects   []SuspectReport     `json:"removedSuspects,omitempty"`
+	ChangedSuspects   []SuspectChange     `json:"changedSuspects,omitempty"`
+}
+
+// ConnectorChange describes what changed for a connector between snapshots.
+type ConnectorChange struct {
+	Name    string   `json:"name"`
+	Changes []string `json:"changes"`
+}
+
+// SuspectChange describes score/signal changes for a connector/task.
+type SuspectChange struct {
+	ConnectorName string   `json:"connector"`
+	TaskID        int      `json:"taskID"`
+	ScoreBefore   int      `json:"scoreBefore"`
+	ScoreAfter    int      `json:"scoreAfter"`
+	Changes       []string `json:"changes"`
 }

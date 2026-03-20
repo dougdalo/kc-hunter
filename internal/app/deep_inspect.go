@@ -29,7 +29,8 @@ namespace (-n) and inspects all of them, displaying a summary table.`,
 }
 
 func init() {
-	deepInspectCmd.Flags().StringVarP(&deepInspectContainer, "container", "c", "", "container name (auto-detected if empty)")
+	deepInspectCmd.Flags().StringVarP(&deepInspectContainer,
+		"container", "c", "", "container name (auto-detected if empty)")
 }
 
 // k8sExecAdapter bridges k8s.Client.ExecInPod to the jvm.Executor interface.
@@ -37,7 +38,11 @@ type k8sExecAdapter struct {
 	client *k8s.Client
 }
 
-func (a *k8sExecAdapter) ExecInPod(ctx context.Context, ns, pod, container string, cmd []string) (string, string, error) {
+func (a *k8sExecAdapter) ExecInPod(
+	ctx context.Context,
+	ns, pod, container string,
+	cmd []string,
+) (string, string, error) {
 	result, err := a.client.ExecInPod(ctx, ns, pod, container, cmd)
 	if err != nil {
 		stdout, stderr := "", ""
@@ -211,7 +216,8 @@ func printSingleResult(result *jvm.Result) {
 	if len(result.TopClasses) > 0 {
 		fmt.Fprintln(w, "Top Classes by Memory:")
 		for i, c := range result.TopClasses {
-			fmt.Fprintf(w, "  %d. %s  (%d instances, %s)\n", i+1, c.ClassName, c.Instances, fmtBytesSimple(c.Bytes))
+			fmt.Fprintf(w, "  %d. %s  (%d instances, %s)\n",
+				i+1, c.ClassName, c.Instances, fmtBytesSimple(c.Bytes))
 		}
 		fmt.Fprintln(w)
 	}

@@ -146,7 +146,12 @@ func (c *Client) GetPodMetrics(ctx context.Context, pods []models.PodInfo) error
 // This is the key method for bastion-host execution: the bastion can reach
 // the K8s API server but NOT the pod network (10.x.x.x). The API server
 // proxies the request to the pod on our behalf.
-func (c *Client) ProxyGet(ctx context.Context, namespace, podName string, port int, path string) ([]byte, error) {
+func (c *Client) ProxyGet(
+	ctx context.Context,
+	namespace, podName string,
+	port int,
+	path string,
+) ([]byte, error) {
 	result := c.clientset.CoreV1().RESTClient().Get().
 		Namespace(namespace).
 		Resource("pods").
@@ -176,7 +181,10 @@ type ExecResult struct {
 // resolveContainer returns a valid container name for the given pod.
 // If container is non-empty and exists in the pod spec, it is returned as-is.
 // If container is empty or not found, the first container in the pod spec is used.
-func (c *Client) resolveContainer(ctx context.Context, namespace, podName, container string) (string, error) {
+func (c *Client) resolveContainer(
+	ctx context.Context,
+	namespace, podName, container string,
+) (string, error) {
 	pod, err := c.clientset.CoreV1().Pods(namespace).Get(ctx, podName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("get pod %s/%s: %w", namespace, podName, err)
@@ -203,7 +211,11 @@ func (c *Client) resolveContainer(ctx context.Context, namespace, podName, conta
 // ExecInPod runs a command inside a container via SPDY exec.
 // Used for deep JVM inspection (jcmd, jmap, thread dump).
 // If container is empty or not found in the pod, the first container is used.
-func (c *Client) ExecInPod(ctx context.Context, namespace, podName, container string, command []string) (*ExecResult, error) {
+func (c *Client) ExecInPod(
+	ctx context.Context,
+	namespace, podName, container string,
+	command []string,
+) (*ExecResult, error) {
 	resolved, err := c.resolveContainer(ctx, namespace, podName, container)
 	if err != nil {
 		return nil, err

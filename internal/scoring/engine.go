@@ -11,68 +11,19 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/dougdalo/kc-hunter/internal/config"
 	"github.com/dougdalo/kc-hunter/pkg/models"
 )
 
-// Thresholds control when each signal fires. Tune to your environment.
-type Thresholds struct {
-	MemoryPercentHot   float64 // pod memory% to be "hot"
-	PollTimeHighMs     float64
-	PutTimeHighMs      float64
-	BatchSizeHigh      float64
-	HighTaskCount      int
-	HighRetryCount     float64
-	OffsetCommitHighMs float64
-}
-
-// DefaultThresholds returns production-reasonable defaults.
-func DefaultThresholds() Thresholds {
-	return Thresholds{
-		MemoryPercentHot:   80.0,
-		PollTimeHighMs:     5000,
-		PutTimeHighMs:      5000,
-		BatchSizeHigh:      10000,
-		HighTaskCount:      5,
-		HighRetryCount:     10,
-		OffsetCommitHighMs: 10000,
-	}
-}
-
-// Signal weights. Sum of all possible weights exceeds 100 intentionally —
-// if many signals fire, the raw total is capped at 100.
-const (
-	wHotWorker     = 25
-	wFailedTask    = 20
-	wHighRetry     = 15
-	wHighPollTime  = 10
-	wHighPutTime   = 10
-	wHighBatch     = 10
-	wHighTaskCount = 10
-	wRiskyClass    = 5
-	wHighCommit    = 5
-)
-
-// Known connector classes with large memory footprints.
-var riskyClasses = map[string]bool{
-	"io.confluent.connect.jdbc.JdbcSourceConnector":                  true,
-	"io.confluent.connect.jdbc.JdbcSinkConnector":                    true,
-	"org.apache.camel.kafkaconnector.ftp.CamelFtpSourceConnector":    true,
-	"org.apache.kafka.connect.file.FileStreamSourceConnector":        true,
-	"io.debezium.connector.mysql.MySqlConnector":                     true,
-	"io.debezium.connector.postgresql.PostgresConnector":             true,
-	"io.confluent.connect.s3.S3SinkConnector":                        true,
-	"io.confluent.connect.elasticsearch.ElasticsearchSinkConnector":  true,
-}
-
 // Engine produces ranked suspect reports.
 type Engine struct {
-	thresholds  Thresholds
+	cfg         config.ScoringConfig
 	connectPort int
 }
 
-// NewEngine creates a scoring engine with the given thresholds and Connect port.
-func NewEngine(t Thresholds, connectPort int) *Engine {
-	return &Engine{thresholds: t, connectPort: connectPort}
+// NewEngine creates a scoring engine with the given config and Connect port.
+func NewEngine(cfg config.ScoringConfig, connectPort int) *Engine {
+	return &Engine{cfg: cfg, connectPort: connectPort}
 }
 
 // ScoreAll evaluates every connector/task and returns a descending-score list.
@@ -107,6 +58,9 @@ func (e *Engine) scoreTask(
 	metricsMap map[string]*models.ConnectorMetrics,
 ) models.SuspectReport {
 
+	w := e.cfg.Weights
+	t := e.cfg
+
 	r := models.SuspectReport{
 		ConnectorName: conn.Name,
 		TaskID:        task.TaskID,
@@ -117,25 +71,29 @@ func (e *Engine) scoreTask(
 	total := 0
 	var signals []models.ScoringSignal
 
-	// Signal: task on hottest worker
+	// Signal: task on hottest worker — only fires if the hottest pod
+	// actually exceeds the MemoryPercentHot threshold. A pod at 40% usage
+	// is not "hot" even if it's the highest in the cluster.
 	if hottestPod != nil {
-		isHot := isOnHotWorker(task.WorkerID, hottestPod, e.connectPort)
-		s := models.ScoringSignal{Name: "on_hottest_worker", Weight: wHotWorker, Active: isHot}
+		onHot := isOnHotWorker(task.WorkerID, hottestPod, e.connectPort)
+		aboveThreshold := hottestPod.MemoryPercent >= t.MemoryPercentHot
+		isHot := onHot && aboveThreshold
+		s := models.ScoringSignal{Name: "on_hottest_worker", Weight: w.HotWorker, Active: isHot}
 		if isHot {
 			s.Description = fmt.Sprintf("assigned to hottest pod %s (%.1f%% mem)", hottestPod.Name, hottestPod.MemoryPercent)
 			s.Value = fmt.Sprintf("%.1f%%", hottestPod.MemoryPercent)
-			total += wHotWorker
+			total += w.HotWorker
 		}
 		signals = append(signals, s)
 	}
 
 	// Signal: failed or unassigned task
 	isBad := task.State == "FAILED" || task.State == "UNASSIGNED"
-	s2 := models.ScoringSignal{Name: "task_failed", Weight: wFailedTask, Active: isBad}
+	s2 := models.ScoringSignal{Name: "task_failed", Weight: w.FailedTask, Active: isBad}
 	if isBad {
 		s2.Description = fmt.Sprintf("task state: %s", task.State)
 		s2.Value = task.State
-		total += wFailedTask
+		total += w.FailedTask
 		if task.Trace != "" {
 			trace := task.Trace
 			if len(trace) > 120 {
@@ -147,68 +105,68 @@ func (e *Engine) scoreTask(
 	signals = append(signals, s2)
 
 	// Signal: high task count per connector (more tasks = more buffers)
-	highTC := len(conn.Tasks) >= e.thresholds.HighTaskCount
-	s3 := models.ScoringSignal{Name: "high_task_count", Weight: wHighTaskCount, Active: highTC}
+	highTC := len(conn.Tasks) >= t.HighTaskCount
+	s3 := models.ScoringSignal{Name: "high_task_count", Weight: w.HighTaskCount, Active: highTC}
 	if highTC {
-		s3.Description = fmt.Sprintf("%d tasks (threshold: %d)", len(conn.Tasks), e.thresholds.HighTaskCount)
+		s3.Description = fmt.Sprintf("%d tasks (threshold: %d)", len(conn.Tasks), t.HighTaskCount)
 		s3.Value = fmt.Sprintf("%d", len(conn.Tasks))
-		total += wHighTaskCount
+		total += w.HighTaskCount
 	}
 	signals = append(signals, s3)
 
-	// Signal: risky connector class
-	isRisky := riskyClasses[conn.ClassName]
-	s4 := models.ScoringSignal{Name: "risky_connector_class", Weight: wRiskyClass, Active: isRisky}
+	// Signal: risky connector class (substring match against configured patterns)
+	isRisky := e.matchRiskyClass(conn.ClassName)
+	s4 := models.ScoringSignal{Name: "risky_connector_class", Weight: w.RiskyClass, Active: isRisky}
 	if isRisky {
 		short := shortClass(conn.ClassName)
 		s4.Description = fmt.Sprintf("high-risk type: %s", short)
 		s4.Value = short
-		total += wRiskyClass
+		total += w.RiskyClass
 	}
 	signals = append(signals, s4)
 
 	// Metrics-based signals (fire only when metrics data exists)
 	key := fmt.Sprintf("%s/%d", conn.Name, task.TaskID)
 	if m, ok := metricsMap[key]; ok && m != nil {
-		if m.PollBatchAvgTimeMs > e.thresholds.PollTimeHighMs {
+		if m.PollBatchAvgTimeMs > t.PollTimeHighMs {
 			signals = append(signals, models.ScoringSignal{
-				Name: "high_poll_time", Weight: wHighPollTime, Active: true,
-				Description: fmt.Sprintf("poll avg: %.0fms (threshold: %.0f)", m.PollBatchAvgTimeMs, e.thresholds.PollTimeHighMs),
+				Name: "high_poll_time", Weight: w.HighPollTime, Active: true,
+				Description: fmt.Sprintf("poll avg: %.0fms (threshold: %.0f)", m.PollBatchAvgTimeMs, t.PollTimeHighMs),
 				Value:       fmt.Sprintf("%.0fms", m.PollBatchAvgTimeMs),
 			})
-			total += wHighPollTime
+			total += w.HighPollTime
 		}
-		if m.PutBatchAvgTimeMs > e.thresholds.PutTimeHighMs {
+		if m.PutBatchAvgTimeMs > t.PutTimeHighMs {
 			signals = append(signals, models.ScoringSignal{
-				Name: "high_put_time", Weight: wHighPutTime, Active: true,
-				Description: fmt.Sprintf("put avg: %.0fms (threshold: %.0f)", m.PutBatchAvgTimeMs, e.thresholds.PutTimeHighMs),
+				Name: "high_put_time", Weight: w.HighPutTime, Active: true,
+				Description: fmt.Sprintf("put avg: %.0fms (threshold: %.0f)", m.PutBatchAvgTimeMs, t.PutTimeHighMs),
 				Value:       fmt.Sprintf("%.0fms", m.PutBatchAvgTimeMs),
 			})
-			total += wHighPutTime
+			total += w.HighPutTime
 		}
-		if m.BatchSizeAvg > e.thresholds.BatchSizeHigh {
+		if m.BatchSizeAvg > t.BatchSizeHigh {
 			signals = append(signals, models.ScoringSignal{
-				Name: "high_batch_size", Weight: wHighBatch, Active: true,
-				Description: fmt.Sprintf("batch avg: %.0f (threshold: %.0f)", m.BatchSizeAvg, e.thresholds.BatchSizeHigh),
+				Name: "high_batch_size", Weight: w.HighBatch, Active: true,
+				Description: fmt.Sprintf("batch avg: %.0f (threshold: %.0f)", m.BatchSizeAvg, t.BatchSizeHigh),
 				Value:       fmt.Sprintf("%.0f", m.BatchSizeAvg),
 			})
-			total += wHighBatch
+			total += w.HighBatch
 		}
-		if m.RetryCount > e.thresholds.HighRetryCount || m.ErrorRate > 0 {
+		if m.RetryCount > t.HighRetryCount || m.ErrorRate > 0 {
 			signals = append(signals, models.ScoringSignal{
-				Name: "high_retry_or_errors", Weight: wHighRetry, Active: true,
+				Name: "high_retry_or_errors", Weight: w.HighRetry, Active: true,
 				Description: fmt.Sprintf("retries: %.0f, errors: %.2f/s", m.RetryCount, m.ErrorRate),
 				Value:       fmt.Sprintf("%.0f retries", m.RetryCount),
 			})
-			total += wHighRetry
+			total += w.HighRetry
 		}
-		if m.OffsetCommitAvgTimeMs > e.thresholds.OffsetCommitHighMs {
+		if m.OffsetCommitAvgTimeMs > t.OffsetCommitHighMs {
 			signals = append(signals, models.ScoringSignal{
-				Name: "high_offset_commit", Weight: wHighCommit, Active: true,
+				Name: "high_offset_commit", Weight: w.HighCommit, Active: true,
 				Description: fmt.Sprintf("offset commit avg: %.0fms", m.OffsetCommitAvgTimeMs),
 				Value:       fmt.Sprintf("%.0fms", m.OffsetCommitAvgTimeMs),
 			})
-			total += wHighCommit
+			total += w.HighCommit
 		}
 	}
 
@@ -229,13 +187,72 @@ func (e *Engine) scoreTask(
 	return r
 }
 
+// matchRiskyClass returns true if className contains any configured risky
+// class pattern as a substring. This allows both exact matches
+// ("io.debezium.connector.mysql.MySqlConnector") and prefix/partial patterns
+// ("io.debezium", "jdbc").
+func (e *Engine) matchRiskyClass(className string) bool {
+	if className == "" {
+		return false
+	}
+	for _, pattern := range e.cfg.RiskyClasses {
+		if strings.Contains(className, pattern) {
+			return true
+		}
+	}
+	return false
+}
+
+// podPressureScore computes a composite score (0–100) reflecting how close
+// a pod is to OOM. This is more meaningful than raw bytes in Kubernetes
+// where pods have different memory limits.
+//
+// Components:
+//   - MemoryPercent (usage/limit): primary signal, weighted 70%
+//   - Proximity to limit (non-linear): weighted 20% — a pod at 95% is
+//     disproportionately more dangerous than one at 85%
+//   - Restart count: weighted 10% — recent OOM kills are a strong indicator
+func podPressureScore(p *models.PodInfo) float64 {
+	pct := p.MemoryPercent
+	if pct < 0 {
+		pct = 0
+	}
+	if pct > 100 {
+		pct = 100
+	}
+
+	// Proximity score: exponential curve that penalizes the last 20% heavily.
+	// At 80% → ~0.0, at 90% → ~0.33, at 95% → ~0.58, at 100% → 1.0.
+	var proximity float64
+	if pct > 80 {
+		proximity = (pct - 80) / 20
+		proximity = proximity * proximity // quadratic ramp
+	}
+
+	// Restart score: cap at 5 restarts for a max of 10 points.
+	restarts := float64(p.RestartCount)
+	if restarts > 5 {
+		restarts = 5
+	}
+	restartScore := restarts / 5
+
+	return pct*0.70 + proximity*100*0.20 + restartScore*100*0.10
+}
+
+// findHottestPod selects the pod with the highest memory pressure.
+// Primary sort: MemoryPercent (usage/limit ratio).
+// Tie-breaker: absolute MemoryUsage (higher bytes wins).
 func findHottestPod(pods []models.PodInfo) *models.PodInfo {
-	var hot *models.PodInfo
-	var max int64
-	for i := range pods {
-		if pods[i].MemoryUsage > max {
-			max = pods[i].MemoryUsage
+	if len(pods) == 0 {
+		return nil
+	}
+	hot := &pods[0]
+	hotScore := podPressureScore(hot)
+	for i := 1; i < len(pods); i++ {
+		s := podPressureScore(&pods[i])
+		if s > hotScore || (s == hotScore && pods[i].MemoryUsage > hot.MemoryUsage) {
 			hot = &pods[i]
+			hotScore = s
 		}
 	}
 	return hot

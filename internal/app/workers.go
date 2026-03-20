@@ -41,7 +41,11 @@ func runWorkers(cmd *cobra.Command, args []string) error {
 // fetchAllConnectors queries connector state from one pod per Strimzi cluster.
 // The Connect REST API returns cluster-wide state regardless of which pod
 // you query, so one successful call per cluster is sufficient.
-func fetchAllConnectors(ctx context.Context, cc *connect.Client, pods []models.PodInfo) []models.ConnectorInfo {
+func fetchAllConnectors(
+	ctx context.Context,
+	cc *connect.Client,
+	pods []models.PodInfo,
+) []models.ConnectorInfo {
 	var all []models.ConnectorInfo
 	queried := make(map[string]bool)
 

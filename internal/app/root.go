@@ -18,7 +18,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var cfg *config.Config
+var (
+	cfg        *config.Config
+	configPath string
+)
 
 var rootCmd = &cobra.Command{
 	Use:   "kc-hunter",
@@ -35,6 +38,7 @@ on localhost), which bypasses networking issues (e.g. GKE timeouts).
 Use --use-proxy to route through the K8s API server proxy instead.
 
 Run without arguments to launch an interactive guided wizard.`,
+	PersistentPreRunE: loadConfigFile,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runInteractive()
 	},
@@ -44,19 +48,35 @@ func init() {
 	cfg = config.DefaultConfig()
 
 	f := rootCmd.PersistentFlags()
-	f.StringVar(&cfg.Kubeconfig, "kubeconfig", "", "path to kubeconfig (precedence: flag > $KUBECONFIG > ~/.kube/config > in-cluster)")
-	f.StringSliceVarP(&cfg.Namespaces, "namespace", "n", cfg.Namespaces, "namespace(s) to scan")
-	f.StringVarP(&cfg.Labels, "selector", "l", cfg.Labels, "label selector for Connect pods")
-	f.StringVarP(&cfg.OutputFormat, "output", "o", cfg.OutputFormat, "output format: table or json")
-	f.DurationVar(&cfg.Timeout, "timeout", cfg.Timeout, "per-request timeout")
-	f.IntVar(&cfg.TopN, "top", cfg.TopN, "number of top suspects to show")
-	f.StringVar(&cfg.PrometheusURL, "prometheus-url", "", "Prometheus base URL")
-	f.StringVar(&cfg.MetricsSource, "metrics", cfg.MetricsSource, "metrics source: prometheus, scrape, or none")
-	f.StringSliceVar(&cfg.ConnectURLs, "connect-url", nil, "explicit Connect REST URL(s); auto-discovered if empty")
-	f.IntVar(&cfg.ConnectPort, "connect-port", cfg.ConnectPort, "Kafka Connect REST port")
-	f.IntVar(&cfg.MetricsPort, "metrics-port", cfg.MetricsPort, "JMX exporter metrics port")
-	f.IntVar(&cfg.Concurrency, "concurrency", cfg.Concurrency, "parallel Connect REST requests")
-	f.BoolVar(&cfg.UseProxy, "use-proxy", cfg.UseProxy, "route Connect REST calls through K8s API server proxy instead of exec")
+	f.StringVar(&configPath, "config", "", "path to config file (YAML)")
+	f.StringVar(&cfg.Kubeconfig, "kubeconfig", "",
+		"path to kubeconfig (precedence: flag > $KUBECONFIG > ~/.kube/config > in-cluster)")
+	f.StringSliceVarP(&cfg.Namespaces, "namespace", "n",
+		cfg.Namespaces, "namespace(s) to scan")
+	f.StringVarP(&cfg.Labels, "selector", "l",
+		cfg.Labels, "label selector for Connect pods")
+	f.StringVarP(&cfg.OutputFormat, "output", "o",
+		cfg.OutputFormat, "output format: table or json")
+	f.DurationVar(&cfg.Timeout, "timeout",
+		cfg.Timeout, "per-request timeout")
+	f.IntVar(&cfg.TopN, "top",
+		cfg.TopN, "number of top suspects to show")
+	f.StringVar(&cfg.PrometheusURL, "prometheus-url",
+		"", "Prometheus base URL")
+	f.StringVar(&cfg.MetricsSource, "metrics",
+		cfg.MetricsSource, "metrics source: prometheus, scrape, or none")
+	f.StringSliceVar(&cfg.ConnectURLs, "connect-url",
+		nil, "explicit Connect REST URL(s); auto-discovered if empty")
+	f.IntVar(&cfg.ConnectPort, "connect-port",
+		cfg.ConnectPort, "Kafka Connect REST port")
+	f.IntVar(&cfg.MetricsPort, "metrics-port",
+		cfg.MetricsPort, "JMX exporter metrics port")
+	f.IntVar(&cfg.Concurrency, "concurrency",
+		cfg.Concurrency, "parallel Connect REST requests")
+	f.BoolVar(&cfg.UseProxy, "use-proxy",
+		cfg.UseProxy, "route Connect REST calls through K8s API server proxy instead of exec")
+	f.BoolVar(&cfg.Explain, "explain",
+		false, "show detailed score breakdown for each suspect")
 
 	rootCmd.AddCommand(podsCmd)
 	rootCmd.AddCommand(workersCmd)
@@ -65,6 +85,79 @@ func init() {
 	rootCmd.AddCommand(inspectWorkerCmd)
 	rootCmd.AddCommand(inspectConnectorCmd)
 	rootCmd.AddCommand(deepInspectCmd)
+	rootCmd.AddCommand(snapshotCmd)
+}
+
+// loadConfigFile implements merge priority: defaults < config file < flags.
+// Cobra has already parsed flags into cfg (which started as defaults).
+// We snapshot those values, load the file on top of defaults, then
+// re-apply any flags the user explicitly set.
+//
+// Validation always runs — it catches bad flag values even without a config file.
+func loadConfigFile(cmd *cobra.Command, args []string) error {
+	if configPath != "" {
+		// When the user explicitly passes --config, the file must exist.
+		if _, err := os.Stat(configPath); err != nil {
+			return fmt.Errorf("config file: %w", err)
+		}
+
+		// Snapshot current cfg — contains defaults overridden by any explicit flags.
+		flagSnapshot := *cfg
+
+		fileCfg, err := config.LoadFromFile(configPath)
+		if err != nil {
+			return fmt.Errorf("config file %s: %w", configPath, err)
+		}
+		*cfg = *fileCfg
+
+		// Re-apply flags that the user explicitly set (flags > file).
+		applyFlagOverrides(cmd, &flagSnapshot)
+	}
+
+	return cfg.Validate()
+}
+
+func applyFlagOverrides(cmd *cobra.Command, snap *config.Config) {
+	f := cmd.Flags()
+	if f.Changed("kubeconfig") {
+		cfg.Kubeconfig = snap.Kubeconfig
+	}
+	if f.Changed("namespace") {
+		cfg.Namespaces = snap.Namespaces
+	}
+	if f.Changed("selector") {
+		cfg.Labels = snap.Labels
+	}
+	if f.Changed("output") {
+		cfg.OutputFormat = snap.OutputFormat
+	}
+	if f.Changed("timeout") {
+		cfg.Timeout = snap.Timeout
+	}
+	if f.Changed("top") {
+		cfg.TopN = snap.TopN
+	}
+	if f.Changed("prometheus-url") {
+		cfg.PrometheusURL = snap.PrometheusURL
+	}
+	if f.Changed("metrics") {
+		cfg.MetricsSource = snap.MetricsSource
+	}
+	if f.Changed("connect-url") {
+		cfg.ConnectURLs = snap.ConnectURLs
+	}
+	if f.Changed("connect-port") {
+		cfg.ConnectPort = snap.ConnectPort
+	}
+	if f.Changed("metrics-port") {
+		cfg.MetricsPort = snap.MetricsPort
+	}
+	if f.Changed("concurrency") {
+		cfg.Concurrency = snap.Concurrency
+	}
+	if f.Changed("use-proxy") {
+		cfg.UseProxy = snap.UseProxy
+	}
 }
 
 // Execute runs the root command.
@@ -103,7 +196,11 @@ type execAdapter struct {
 	client *k8s.Client
 }
 
-func (a *execAdapter) exec(ctx context.Context, namespace, podName, container string, command []string) (string, string, error) {
+func (a *execAdapter) exec(
+	ctx context.Context,
+	namespace, podName, container string,
+	command []string,
+) (string, string, error) {
 	result, err := a.client.ExecInPod(ctx, namespace, podName, container, command)
 	if err != nil {
 		stdout, stderr := "", ""
@@ -130,7 +227,8 @@ func newMetricsProvider() metrics.Provider {
 	switch cfg.MetricsSource {
 	case "prometheus":
 		if cfg.PrometheusURL == "" {
-			fmt.Fprintln(os.Stderr, "warning: --prometheus-url required for prometheus metrics source, falling back to none")
+			fmt.Fprintln(os.Stderr,
+			"warning: --prometheus-url required for prometheus metrics source, falling back to none")
 			return metrics.NewNoopProvider()
 		}
 		return metrics.NewPrometheusProvider(cfg.PrometheusURL, cfg.Timeout)
@@ -142,11 +240,13 @@ func newMetricsProvider() metrics.Provider {
 }
 
 func newScoringEngine() *scoring.Engine {
-	return scoring.NewEngine(scoring.DefaultThresholds(), cfg.ConnectPort)
+	return scoring.NewEngine(cfg.Scoring, cfg.ConnectPort)
 }
 
 func newFormatter() *output.Formatter {
-	return output.NewFormatter(cfg.OutputFormat, os.Stdout)
+	f := output.NewFormatter(cfg.OutputFormat, os.Stdout)
+	f.SetExplain(cfg.Explain, cfg.Scoring)
+	return f
 }
 
 // suspectTimeout returns a longer timeout for the full diagnostic scan,

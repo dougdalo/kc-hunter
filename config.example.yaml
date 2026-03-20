@@ -1,0 +1,58 @@
+# kc-hunter configuration file
+# Usage: kc-hunter --config config.yaml suspect -n kafka-prod
+#
+# Merge priority: defaults < this file < CLI flags.
+# Only include values you want to override — defaults apply for the rest.
+
+# --- General ---
+# namespaces: ["kafka-prod"]
+# labels: "strimzi.io/kind=KafkaConnect"
+# connectPort: 8083
+# metricsPort: 9404
+# metricsSource: "none"          # "prometheus", "scrape", or "none"
+# prometheusURL: ""
+# timeout: 30s
+# outputFormat: "table"          # "table" or "json"
+# topN: 10
+# concurrency: 10
+# useProxy: false
+
+# --- Scoring Engine ---
+scoring:
+  # Thresholds — when each signal fires.
+  memoryPercentHot: 80           # pod memory% to be considered "hot"
+  pollTimeHighMs: 5000           # source poll latency threshold (ms)
+  putTimeHighMs: 5000            # sink put latency threshold (ms)
+  batchSizeHigh: 10000           # average batch size threshold (records)
+  highTaskCount: 5               # task count per connector to flag
+  highRetryCount: 10             # retry count threshold
+  offsetCommitHighMs: 10000      # offset commit latency threshold (ms)
+
+  # Weights — relative importance of each signal (0 = disabled).
+  # Total can exceed 100; final score is capped at 100.
+  weights:
+    hotWorker: 25                # task runs on the pod with highest memory
+    failedTask: 20               # task state is FAILED or UNASSIGNED
+    highRetry: 15                # retry count or error rate exceeded
+    highPollTime: 10             # source poll latency exceeded
+    highPutTime: 10              # sink put latency exceeded
+    highBatch: 10                # batch size exceeded
+    highTaskCount: 10            # connector has too many tasks
+    riskyClass: 5                # known high-memory connector class
+    highCommit: 5                # offset commit latency exceeded
+
+  # Risky connector classes — matched by substring.
+  # Use full class names for exact matches, or shorter patterns for families.
+  # Setting this replaces the default list entirely.
+  riskyClasses:
+    - "io.confluent.connect.jdbc.JdbcSourceConnector"
+    - "io.confluent.connect.jdbc.JdbcSinkConnector"
+    - "org.apache.camel.kafkaconnector.ftp.CamelFtpSourceConnector"
+    - "org.apache.kafka.connect.file.FileStreamSourceConnector"
+    - "io.debezium.connector.mysql.MySqlConnector"
+    - "io.debezium.connector.postgresql.PostgresConnector"
+    - "io.confluent.connect.s3.S3SinkConnector"
+    - "io.confluent.connect.elasticsearch.ElasticsearchSinkConnector"
+    # Examples using substring patterns:
+    # - "io.debezium"             # matches all Debezium connectors
+    # - "jdbc"                    # matches any class containing "jdbc"
