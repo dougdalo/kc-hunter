@@ -19,7 +19,7 @@
 
 ## 🎯 Why kc-hunter?
 
-When you're running **800+ connectors** across a Strimzi Kafka Connect cluster, the JVM shares a single heap among all tasks. Standard monitoring tells you *which Pod is hot* — but not **which connector is responsible**.
+When you're running **many connectors** across a Strimzi Kafka Connect cluster, the JVM shares a single heap among all tasks. Standard monitoring tells you *which Pod is hot* — but not **which connector is responsible**.
 
 **kc-hunter** bridges that gap. It correlates infrastructure metrics (Pod RAM, CPU) with the logical topology of Kafka Connect (Connectors, Tasks, Worker assignments) and produces a **Suspicion Score** that ranks the most likely memory culprits.
 
