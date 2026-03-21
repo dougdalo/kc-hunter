@@ -37,14 +37,22 @@ cd kc-hunter
 go build -o bin/kc-hunter ./cmd/kc-hunter/
 ```
 
-### Static binary (recommended for bastion hosts)
+### Static binary with version info (recommended for bastion hosts)
 
 ```bash
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-  go build -ldflags='-s -w' -o bin/kc-hunter ./cmd/kc-hunter/
+  go build -ldflags="-s -w \
+    -X github.com/dougdalo/kc-hunter/internal/app.version=1.0.0 \
+    -X github.com/dougdalo/kc-hunter/internal/app.commit=$(git rev-parse --short HEAD)" \
+  -o bin/kc-hunter ./cmd/kc-hunter/
 ```
 
 The resulting binary is fully static with no `glibc` dependency — copy it to any Linux x86_64 host.
+
+```bash
+kc-hunter version
+# kc-hunter 1.0.0 (commit: abc1234)
+```
 
 ### Run
 
@@ -271,8 +279,17 @@ The diff shows added/removed/changed connectors and suspects, including score de
 
 Run a sequence of diagnostic checks to verify that kc-hunter can operate correctly in the current environment. Useful as a first step during an incident or when troubleshooting configuration.
 
+**Exits with code 2 when any check fails**, making it usable as a pipeline gate:
+
 ```bash
-kc-hunter doctor -n kafka-prod
+# Gate: only run suspect if doctor passes
+kc-hunter doctor -n kafka-prod && kc-hunter suspect -n kafka-prod
+
+# In CI/scripts: check exit code explicitly
+kc-hunter doctor -n kafka-prod -q
+if [ $? -eq 2 ]; then
+  echo "Environment not ready for diagnostics"
+fi
 ```
 
 **Checks performed:**
@@ -348,10 +365,12 @@ See [`config.example.yaml`](config.example.yaml) for a fully documented template
 | `-n, --namespace` | *(all namespaces)* | Target namespace(s) — repeatable |
 | `-l, --selector` | `strimzi.io/kind=KafkaConnect` | Label selector for Connect pods |
 | `-o, --output` | `table` | Output format: `table` or `json` |
+| `-q, --quiet` | `false` | Suppress informational messages; only show data and errors |
 | `--timeout` | `30s` | Per-request timeout |
 | `--top` | `10` | Number of top suspects to display |
 | `--concurrency` | `10` | Max parallel Connect REST requests |
 | `--explain` | `false` | Show detailed score breakdown per suspect |
+| `--debug` | `false` | Enable debug logging to stderr |
 | `--use-proxy` | `false` | Route through K8s API server proxy |
 | `--connect-url` | *(auto-discovered)* | Explicit Connect REST URL(s) |
 | `--connect-port` | `8083` | Kafka Connect REST API port |
@@ -368,6 +387,101 @@ See [`config.example.yaml`](config.example.yaml) for a fully documented template
 | 2 | `$KUBECONFIG` environment variable |
 | 3 | `~/.kube/config` |
 | 4 | In-cluster service account |
+
+---
+
+## Exit Codes
+
+kc-hunter uses semantic exit codes for predictable scripting:
+
+| Code | Meaning | When |
+|------|---------|------|
+| **0** | Success | Command completed successfully with full data |
+| **1** | Error | Command failed (bad config, K8s unreachable, invalid args) |
+| **2** | Partial | Command completed but with degraded data or `doctor` check failures |
+
+Exit code 2 is the key differentiator for automation: it means "the tool ran, but something was wrong with the environment." Scripts can decide whether to trust the output or escalate.
+
+---
+
+## Output Discipline
+
+All commands follow a strict stdout/stderr contract for safe piping:
+
+| Stream | Content |
+|--------|---------|
+| **stdout** | Data only — tables, JSON, diff reports. Safe to pipe to `jq`, `grep`, or file. |
+| **stderr** | Informational messages, warnings, debug logs. Never mixed with data. |
+
+```bash
+# Safe: pipe JSON to jq without info messages
+kc-hunter suspect -n kafka-prod -o json | jq '.suspects[0]'
+
+# Safe: redirect data to file, see warnings on terminal
+kc-hunter suspect -n kafka-prod > report.txt
+
+# Suppress info messages for cron/scripts
+kc-hunter suspect -n kafka-prod -q -o json > /tmp/report.json
+```
+
+### Verbosity levels
+
+| Flag | Info messages | Warnings | Debug logs |
+|------|-------------|----------|------------|
+| *(default)* | shown | shown | hidden |
+| `-q, --quiet` | hidden | shown | hidden |
+| `--debug` | shown | shown | shown |
+
+---
+
+## Automation and Runbooks
+
+### Incident response workflow
+
+```bash
+# Step 1: Validate environment
+kc-hunter doctor -n kafka-prod -q
+if [ $? -ne 0 ]; then
+  echo "FAIL: environment not ready" >&2
+  exit 1
+fi
+
+# Step 2: Save baseline snapshot
+kc-hunter snapshot save -O /tmp/before.json -n kafka-prod -q
+
+# Step 3: Full suspect report (JSON for programmatic access)
+kc-hunter suspect -n kafka-prod -o json > /tmp/suspects.json
+
+# Step 4: Extract top suspect score
+TOP_SCORE=$(jq '.suspects[0].score // 0' /tmp/suspects.json)
+echo "Top suspect score: $TOP_SCORE"
+
+# Step 5: After remediation, compare
+kc-hunter snapshot save -O /tmp/after.json -n kafka-prod -q
+kc-hunter snapshot diff /tmp/before.json /tmp/after.json
+```
+
+### Periodic health check (cron / monitoring)
+
+```bash
+#!/bin/bash
+# Run every 5 minutes; alert if top suspect score exceeds threshold
+REPORT=$(kc-hunter suspect -n kafka-prod -o json -q 2>/dev/null)
+TOP_SCORE=$(echo "$REPORT" | jq '.suspects[0].score // 0')
+
+if [ "$TOP_SCORE" -ge 70 ]; then
+  echo "ALERT: kc-hunter top suspect score=$TOP_SCORE" | \
+    mail -s "Kafka Connect memory pressure" oncall@example.com
+fi
+```
+
+### CI/CD gate
+
+```bash
+# Block deployment if environment is unhealthy
+kc-hunter doctor -n kafka-prod -q || exit 1
+echo "Environment healthy, proceeding with deploy"
+```
 
 ---
 
@@ -443,6 +557,12 @@ go test -race ./...
 | Resilience | Retry with exponential backoff, context cancellation, step timeout derivation |
 | Confidence | Signal evaluability computation, confidence derivation from collection stats |
 | Coverage output | Formatter renders coverage section, warnings, footer confidence indicator; JSON includes coverage |
+| Snapshot/diff | Pod snapshots, task state capture, save/load roundtrip, v1 backward compat, unsupported version rejection, executive summary, meta diff, score delta, signal changes, headline generation |
+| Exit codes | ExitCodeError unwrapping, PartialError creation, SilentError behavior, code constants |
+| Output discipline | `info()` respects `--quiet`, `warn()` always prints, both write to stderr |
+| Config validation | Default config validity, port range, output format, metrics source, negative thresholds, negative weights, multiple errors, merge defaults |
+| Connect client | Transport interface mock, ListConnectors, GetConnectorStatus, GetConnectorConfig, GetAllConnectors with partial failures, ProxyTransport validation, ExecTransport curl/wget fallback |
+| Metrics scrape | Prometheus exposition parsing, parseLine with/without labels, malformed lines, replacePort IPv4/IPv6, mapToStructured field mapping |
 
 ---
 

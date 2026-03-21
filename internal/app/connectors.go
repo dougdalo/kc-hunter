@@ -31,7 +31,7 @@ func runConnectors(cmd *cobra.Command, args []string) error {
 	connectors := fetchAllConnectors(ctx, cc, pods)
 
 	if len(connectors) == 0 {
-		fmt.Println("No connectors found.")
+		info("No connectors found.")
 		return nil
 	}
 

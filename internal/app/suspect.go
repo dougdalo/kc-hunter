@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"time"
 
@@ -44,7 +43,7 @@ func runSuspect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("discover pods: %w", err)
 	}
 	if len(pods) == 0 {
-		fmt.Println("No Kafka Connect pods found.")
+		info("No Kafka Connect pods found. Check --namespace and --selector.")
 		return nil
 	}
 
@@ -52,17 +51,11 @@ func runSuspect(cmd *cobra.Command, args []string) error {
 	podMetricsOK := false
 	{
 		stepCtx, stepCancel := resilience.StepTimeout(ctx, 0.15, cfg.Timeout)
-		metricsErr := k.GetPodMetrics(stepCtx, pods)
+		metricsResult := k.GetPodMetrics(stepCtx, pods)
 		stepCancel()
 
-		if metricsErr == nil {
-			// Check if any pod actually got metrics data.
-			for _, p := range pods {
-				if p.MemoryUsage > 0 {
-					podMetricsOK = true
-					break
-				}
-			}
+		if metricsResult.Enriched > 0 {
+			podMetricsOK = true
 		}
 	}
 
@@ -144,7 +137,7 @@ func runSuspect(cmd *cobra.Command, args []string) error {
 			stats.Confidence = "low"
 			stats.Warnings = append(stats.Warnings,
 				fmt.Sprintf("Connect REST unreachable for cluster %s — no connectors scored", clusterName))
-			fmt.Fprintf(os.Stderr, "warning: no Connect API reachable for cluster %s (tried %d pods)\n",
+			warn("no Connect API reachable for cluster %s (tried %d pods)",
 				clusterName, len(clusterPods))
 
 			// Emit a diagnostic-only report so the user sees the cluster was attempted.

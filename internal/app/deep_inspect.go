@@ -121,7 +121,7 @@ func runDeepInspect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no Kafka Connect pods found in namespace %q", ns)
 	}
 
-	fmt.Fprintf(os.Stdout, "Discovered %d Connect pod(s) in namespace %q\n\n", len(targets), ns)
+	info("Discovered %d Connect pod(s) in namespace %q\n", len(targets), ns)
 
 	// Inspect all pods with bounded concurrency.
 	type podResult struct {

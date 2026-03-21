@@ -3,7 +3,6 @@ package app
 import (
 	"context"
 	"fmt"
-	"os"
 	"sort"
 	"time"
 
@@ -77,19 +76,19 @@ func runSnapshotSave(cmd *cobra.Command, args []string) error {
 			ref := podRef(pod)
 			result, fetchErr := cc.GetAllConnectors(ctx, ref)
 			if fetchErr != nil {
-				fmt.Fprintf(os.Stderr, "warning: cluster %s via pod %s: %v\n", clusterName, pod.Name, fetchErr)
+				warn("cluster %s via pod %s: %v", clusterName, pod.Name, fetchErr)
 				continue
 			}
 			connectors = result.Connectors
 			if result.Errors > 0 {
-				fmt.Fprintf(os.Stderr, "warning: %d/%d connector fetches failed for cluster %s\n",
+				warn("%d/%d connector fetches failed for cluster %s",
 					result.Errors, result.Total, clusterName)
 			}
 			queried = true
 			break
 		}
 		if !queried {
-			fmt.Fprintf(os.Stderr, "warning: no Connect API reachable for cluster %s\n", clusterName)
+			warn("no Connect API reachable for cluster %s", clusterName)
 			continue
 		}
 
@@ -133,12 +132,26 @@ func runSnapshotSave(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no cluster data collected")
 	}
 
-	snap := snapshot.BuildSnapshot(diags)
+	meta := &models.SnapshotMeta{
+		Namespaces:    cfg.Namespaces,
+		Labels:        cfg.Labels,
+		MetricsSource: cfg.MetricsSource,
+	}
+	switch {
+	case cfg.UseProxy:
+		meta.Transport = "proxy"
+	case len(cfg.ConnectURLs) > 0:
+		meta.Transport = "direct"
+	default:
+		meta.Transport = "exec"
+	}
+
+	snap := snapshot.BuildSnapshot(diags, meta)
 	if err := snapshot.Save(snap, snapshotOutputFile); err != nil {
 		return err
 	}
 
-	fmt.Fprintf(os.Stderr, "Snapshot saved to %s (%d clusters, %d connectors)\n",
+	info("Snapshot saved to %s (%d clusters, %d connectors)",
 		snapshotOutputFile, len(snap.Clusters), countConnectors(snap))
 	return nil
 }

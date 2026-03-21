@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -160,19 +161,18 @@ func parseLine(line string) (string, map[string]string, float64) {
 	return name, labels, val
 }
 
-// replacePort swaps the port in http://host:port to the given port.
+// replacePort swaps the port in a URL to the given port.
+// Handles IPv4 (http://10.0.0.1:8083) and IPv6 (http://[::1]:8083) correctly.
 func replacePort(rawURL string, port int) string {
-	// Find the last colon that precedes a port number (after the scheme)
-	schemeEnd := strings.Index(rawURL, "://")
-	if schemeEnd == -1 {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
 		return rawURL
 	}
-	hostPort := rawURL[schemeEnd+3:]
-	colonIdx := strings.LastIndexByte(hostPort, ':')
-	if colonIdx == -1 {
-		return fmt.Sprintf("%s:%d", rawURL, port)
+	host := u.Hostname() // strips brackets from IPv6
+	if strings.Contains(host, ":") {
+		// IPv6 — must bracket the address
+		host = "[" + host + "]"
 	}
-	// Strip old port (and any trailing path)
-	host := hostPort[:colonIdx]
-	return fmt.Sprintf("%s://%s:%d", rawURL[:schemeEnd], host, port)
+	u.Host = fmt.Sprintf("%s:%d", host, port)
+	return u.String()
 }

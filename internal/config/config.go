@@ -246,6 +246,17 @@ func (c *Config) Validate() error {
 	if s.HighTaskCount < 1 {
 		errs = append(errs, fmt.Sprintf("scoring.highTaskCount: must be >= 1, got %d", s.HighTaskCount))
 	}
+	for name, val := range map[string]float64{
+		"pollTimeHighMs":     s.PollTimeHighMs,
+		"putTimeHighMs":      s.PutTimeHighMs,
+		"batchSizeHigh":      s.BatchSizeHigh,
+		"highRetryCount":     s.HighRetryCount,
+		"offsetCommitHighMs": s.OffsetCommitHighMs,
+	} {
+		if val < 0 {
+			errs = append(errs, fmt.Sprintf("scoring.%s: must be >= 0, got %.1f", name, val))
+		}
+	}
 
 	// Scoring weights — negative weights are invalid.
 	w := s.Weights

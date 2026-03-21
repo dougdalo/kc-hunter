@@ -348,13 +348,64 @@ func (f *Formatter) PrintDiff(diff models.DiffReport) error {
 	fmt.Fprintf(f.w, " %s\n", c.bold("SNAPSHOT DIFF"))
 	fmt.Fprintf(f.w, "%s\n", c.bold("========================================"))
 	fmt.Fprintf(f.w, " Before: %s\n", diff.BeforeTime.Format("2006-01-02 15:04:05"))
-	fmt.Fprintf(f.w, " After:  %s\n\n", diff.AfterTime.Format("2006-01-02 15:04:05"))
+	fmt.Fprintf(f.w, " After:  %s\n", diff.AfterTime.Format("2006-01-02 15:04:05"))
+
+	// Executive summary.
+	if s := diff.Summary; s != nil {
+		fmt.Fprintf(f.w, " Delta:  %s\n\n", s.TimeDelta)
+		fmt.Fprintf(f.w, " %s %s\n\n", c.bold(">>"), c.bold(s.Headline))
+
+		// Counts line.
+		var parts []string
+		if s.ConnectorsAdded > 0 {
+			parts = append(parts, c.green(fmt.Sprintf("+%d connectors", s.ConnectorsAdded)))
+		}
+		if s.ConnectorsRemoved > 0 {
+			parts = append(parts, c.red(fmt.Sprintf("-%d connectors", s.ConnectorsRemoved)))
+		}
+		if s.ConnectorsChanged > 0 {
+			parts = append(parts, c.yellow(fmt.Sprintf("~%d connectors", s.ConnectorsChanged)))
+		}
+		if s.ScoreIncreases > 0 {
+			parts = append(parts, c.boldRed(fmt.Sprintf("%d scores ↑", s.ScoreIncreases)))
+		}
+		if s.ScoreDecreases > 0 {
+			parts = append(parts, c.boldGreen(fmt.Sprintf("%d scores ↓", s.ScoreDecreases)))
+		}
+		if s.TaskStateChanges > 0 {
+			parts = append(parts, fmt.Sprintf("%d task changes", s.TaskStateChanges))
+		}
+		if s.PodRestartChanges > 0 {
+			parts = append(parts, c.boldYellow(fmt.Sprintf("%d pod restarts", s.PodRestartChanges)))
+		}
+		if s.PodsAdded > 0 {
+			parts = append(parts, c.green(fmt.Sprintf("+%d pods", s.PodsAdded)))
+		}
+		if s.PodsRemoved > 0 {
+			parts = append(parts, c.red(fmt.Sprintf("-%d pods", s.PodsRemoved)))
+		}
+		if len(parts) > 0 {
+			fmt.Fprintf(f.w, " %s\n\n", strings.Join(parts, "  "))
+		}
+	} else {
+		fmt.Fprintln(f.w)
+	}
+
+	// Metadata diff warning.
+	if md := diff.MetaDiff; md != nil {
+		fmt.Fprintf(f.w, " %s %s\n", c.boldYellow("!"), c.boldYellow("Collection parameters changed — interpret diff with caution:"))
+		for _, ch := range md.Changes {
+			fmt.Fprintf(f.w, "   %s\n", ch)
+		}
+		fmt.Fprintln(f.w)
+	}
 
 	hasChanges := false
 	for _, cd := range diff.Clusters {
 		clusterHasChanges := len(cd.AddedConnectors) > 0 || len(cd.RemovedConnectors) > 0 ||
 			len(cd.ChangedConnectors) > 0 || len(cd.AddedSuspects) > 0 ||
-			len(cd.RemovedSuspects) > 0 || len(cd.ChangedSuspects) > 0
+			len(cd.RemovedSuspects) > 0 || len(cd.ChangedSuspects) > 0 ||
+			len(cd.AddedPods) > 0 || len(cd.RemovedPods) > 0 || len(cd.ChangedPods) > 0
 
 		if !clusterHasChanges {
 			continue
@@ -362,6 +413,26 @@ func (f *Formatter) PrintDiff(diff models.DiffReport) error {
 		hasChanges = true
 
 		fmt.Fprintf(f.w, "--- Cluster: %s ---\n\n", c.bold(cd.ClusterName))
+
+		// Infrastructure: pod changes.
+		if len(cd.AddedPods) > 0 || len(cd.RemovedPods) > 0 || len(cd.ChangedPods) > 0 {
+			fmt.Fprintf(f.w, "  %s\n", c.bold("Infrastructure:"))
+			for _, p := range cd.AddedPods {
+				fmt.Fprintf(f.w, "    %s (node=%s, mem=%.1f%%)\n",
+					c.green("+ pod "+p.Name), p.NodeName, p.MemoryPercent)
+			}
+			for _, p := range cd.RemovedPods {
+				fmt.Fprintf(f.w, "    %s (node=%s)\n",
+					c.red("- pod "+p.Name), p.NodeName)
+			}
+			for _, p := range cd.ChangedPods {
+				fmt.Fprintf(f.w, "    %s\n", c.yellow("~ pod "+p.Name))
+				for _, ch := range p.Changes {
+					fmt.Fprintf(f.w, "        %s\n", ch)
+				}
+			}
+			fmt.Fprintln(f.w)
+		}
 
 		if len(cd.AddedConnectors) > 0 {
 			fmt.Fprintf(f.w, "  %s\n", c.bold("Added connectors:"))
@@ -387,6 +458,9 @@ func (f *Formatter) PrintDiff(diff models.DiffReport) error {
 				fmt.Fprintf(f.w, "    %s\n", c.yellow("~ "+cn.Name))
 				for _, ch := range cn.Changes {
 					fmt.Fprintf(f.w, "        %s\n", ch)
+				}
+				for _, tc := range cn.TaskChanges {
+					fmt.Fprintf(f.w, "        %s\n", tc)
 				}
 			}
 			fmt.Fprintln(f.w)
@@ -416,16 +490,19 @@ func (f *Formatter) PrintDiff(diff models.DiffReport) error {
 			for _, s := range cd.ChangedSuspects {
 				arrow := "="
 				arrowColor := c.dim
-				if s.ScoreAfter > s.ScoreBefore {
+				deltaStr := ""
+				if s.ScoreDelta > 0 {
 					arrow = "↑"
 					arrowColor = c.boldRed
-				} else if s.ScoreAfter < s.ScoreBefore {
+					deltaStr = fmt.Sprintf(" (+%d)", s.ScoreDelta)
+				} else if s.ScoreDelta < 0 {
 					arrow = "↓"
 					arrowColor = c.boldGreen
+					deltaStr = fmt.Sprintf(" (%d)", s.ScoreDelta)
 				}
-				fmt.Fprintf(f.w, "    %s  %d %s %d\n",
+				fmt.Fprintf(f.w, "    %s  %d %s %d%s\n",
 					c.yellow(fmt.Sprintf("~ %s/task-%d", s.ConnectorName, s.TaskID)),
-					s.ScoreBefore, arrowColor(arrow), s.ScoreAfter)
+					s.ScoreBefore, arrowColor(arrow), s.ScoreAfter, deltaStr)
 				for _, ch := range s.Changes {
 					fmt.Fprintf(f.w, "        %s\n", ch)
 				}

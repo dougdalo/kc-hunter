@@ -59,7 +59,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		// Cannot proceed without a K8s client.
 		report.Results = append(report.Results, skipRemaining("cluster-access failed")...)
 		printReport(&report)
-		return nil
+		return &SilentError{Code: ExitPartial}
 	}
 
 	clusterCheck := doctor.CheckClusterAccess(ctx, func(ctx context.Context) (string, error) {
@@ -74,7 +74,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	if clusterCheck.Status == doctor.StatusFail {
 		report.Results = append(report.Results, skipRemaining("cluster-access failed")...)
 		printReport(&report)
-		return nil
+		return &SilentError{Code: ExitPartial}
 	}
 
 	// 2. Namespaces.
@@ -152,6 +152,12 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	}
 
 	printReport(&report)
+
+	// Return exit code 2 when checks fail, so scripts can gate on `doctor`.
+	// The report was already printed — use SilentError to avoid double-printing.
+	if report.HasFailures() {
+		return &SilentError{Code: ExitPartial}
+	}
 	return nil
 }
 

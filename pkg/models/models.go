@@ -131,39 +131,103 @@ type DiagnosticReport struct {
 	CollectedAt time.Time           `json:"collectedAt"`
 }
 
-// Snapshot captures cluster state at a point in time for later comparison.
-type Snapshot struct {
-	Version     string              `json:"version"`
-	CollectedAt time.Time           `json:"collectedAt"`
-	Clusters    []ClusterSnapshot   `json:"clusters"`
+// SnapshotMeta records the collection context — which namespaces, labels,
+// transport mode, and metrics source were used. Crucial for interpreting
+// diffs: a score change means nothing if the collection parameters differ.
+type SnapshotMeta struct {
+	Namespaces    []string `json:"namespaces,omitempty"`
+	Labels        string   `json:"labels,omitempty"`
+	Transport     string   `json:"transport,omitempty"`     // "exec", "proxy", "direct"
+	MetricsSource string   `json:"metricsSource,omitempty"` // "prometheus", "scrape", "none"
 }
 
-// ClusterSnapshot captures one cluster's connectors and suspect scores.
+// Snapshot captures cluster state at a point in time for later comparison.
+type Snapshot struct {
+	Version     string            `json:"version"`
+	CollectedAt time.Time         `json:"collectedAt"`
+	Meta        *SnapshotMeta     `json:"meta,omitempty"`
+	Clusters    []ClusterSnapshot `json:"clusters"`
+}
+
+// PodSnapshot captures pod resource state for diffing.
+type PodSnapshot struct {
+	Name          string  `json:"name"`
+	NodeName      string  `json:"node"`
+	MemoryUsage   int64   `json:"memoryUsage"`
+	MemoryLimit   int64   `json:"memoryLimit"`
+	MemoryPercent float64 `json:"memoryPercent"`
+	RestartCount  int32   `json:"restartCount"`
+	Ready         bool    `json:"ready"`
+}
+
+// ClusterSnapshot captures one cluster's connectors, pods, and suspect scores.
 type ClusterSnapshot struct {
 	ClusterName string              `json:"cluster"`
+	Pods        []PodSnapshot       `json:"pods,omitempty"`
 	Connectors  []ConnectorSnapshot `json:"connectors"`
 	Suspects    []SuspectReport     `json:"suspects"`
 }
 
+// TaskSnapshot captures individual task state for diffing.
+type TaskSnapshot struct {
+	TaskID   int    `json:"taskID"`
+	State    string `json:"state"`
+	WorkerID string `json:"workerID"`
+}
+
 // ConnectorSnapshot captures connector state for diffing.
 type ConnectorSnapshot struct {
-	Name      string `json:"name"`
-	Type      string `json:"type"`
-	State     string `json:"state"`
-	ClassName string `json:"class"`
-	TaskCount int    `json:"taskCount"`
+	Name      string         `json:"name"`
+	Type      string         `json:"type"`
+	State     string         `json:"state"`
+	ClassName string         `json:"class"`
+	TaskCount int            `json:"taskCount"`
+	Tasks     []TaskSnapshot `json:"tasks,omitempty"`
+}
+
+// DiffSummary provides an executive overview of changes between two snapshots.
+type DiffSummary struct {
+	TimeDelta          string `json:"timeDelta"`
+	ConnectorsAdded    int    `json:"connectorsAdded,omitempty"`
+	ConnectorsRemoved  int    `json:"connectorsRemoved,omitempty"`
+	ConnectorsChanged  int    `json:"connectorsChanged,omitempty"`
+	TaskStateChanges   int    `json:"taskStateChanges,omitempty"`
+	ScoreIncreases     int    `json:"scoreIncreases,omitempty"`
+	ScoreDecreases     int    `json:"scoreDecreases,omitempty"`
+	MaxScoreDelta      int    `json:"maxScoreDelta,omitempty"`
+	PodRestartChanges  int    `json:"podRestartChanges,omitempty"`
+	PodsAdded          int    `json:"podsAdded,omitempty"`
+	PodsRemoved        int    `json:"podsRemoved,omitempty"`
+	MetaChanged        bool   `json:"metaChanged,omitempty"`
+	Headline           string `json:"headline"`
 }
 
 // DiffReport holds the result of comparing two snapshots.
 type DiffReport struct {
-	BeforeTime time.Time          `json:"beforeTime"`
-	AfterTime  time.Time          `json:"afterTime"`
+	BeforeTime time.Time           `json:"beforeTime"`
+	AfterTime  time.Time           `json:"afterTime"`
+	Summary    *DiffSummary        `json:"summary,omitempty"`
+	MetaDiff   *MetaDiff           `json:"metaDiff,omitempty"`
 	Clusters   []ClusterDiffReport `json:"clusters"`
+}
+
+// MetaDiff describes changes in collection parameters between snapshots.
+type MetaDiff struct {
+	Changes []string `json:"changes"`
+}
+
+// PodChange describes what changed for a pod between snapshots.
+type PodChange struct {
+	Name    string   `json:"name"`
+	Changes []string `json:"changes"`
 }
 
 // ClusterDiffReport holds diff results for a single cluster.
 type ClusterDiffReport struct {
-	ClusterName       string            `json:"cluster"`
+	ClusterName       string              `json:"cluster"`
+	AddedPods         []PodSnapshot       `json:"addedPods,omitempty"`
+	RemovedPods       []PodSnapshot       `json:"removedPods,omitempty"`
+	ChangedPods       []PodChange         `json:"changedPods,omitempty"`
 	AddedConnectors   []ConnectorSnapshot `json:"addedConnectors,omitempty"`
 	RemovedConnectors []ConnectorSnapshot `json:"removedConnectors,omitempty"`
 	ChangedConnectors []ConnectorChange   `json:"changedConnectors,omitempty"`
@@ -174,8 +238,9 @@ type ClusterDiffReport struct {
 
 // ConnectorChange describes what changed for a connector between snapshots.
 type ConnectorChange struct {
-	Name    string   `json:"name"`
-	Changes []string `json:"changes"`
+	Name        string   `json:"name"`
+	Changes     []string `json:"changes"`
+	TaskChanges []string `json:"taskChanges,omitempty"`
 }
 
 // SuspectChange describes score/signal changes for a connector/task.
@@ -184,5 +249,6 @@ type SuspectChange struct {
 	TaskID        int      `json:"taskID"`
 	ScoreBefore   int      `json:"scoreBefore"`
 	ScoreAfter    int      `json:"scoreAfter"`
+	ScoreDelta    int      `json:"scoreDelta"`
 	Changes       []string `json:"changes"`
 }

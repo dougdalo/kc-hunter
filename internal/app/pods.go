@@ -28,7 +28,7 @@ func runPods(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("discover pods: %w", err)
 	}
 	if len(pods) == 0 {
-		fmt.Println("No Kafka Connect pods found. Check --namespace and --selector.")
+		info("No Kafka Connect pods found. Check --namespace and --selector.")
 		return nil
 	}
 

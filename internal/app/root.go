@@ -19,10 +19,18 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// Version information — set via ldflags at build time.
+// Example: go build -ldflags "-X ...app.version=1.0.0 -X ...app.commit=abc123"
+var (
+	version = "dev"
+	commit  = "unknown"
+)
+
 var (
 	cfg        *config.Config
 	configPath string
 	debugMode  bool
+	quietMode  bool
 )
 
 var rootCmd = &cobra.Command{
@@ -81,7 +89,10 @@ func init() {
 		false, "show detailed score breakdown for each suspect")
 	f.BoolVar(&debugMode, "debug",
 		false, "enable debug logging to stderr")
+	f.BoolVarP(&quietMode, "quiet", "q",
+		false, "suppress informational messages; only show data and errors")
 
+	rootCmd.AddCommand(versionCmd)
 	rootCmd.AddCommand(podsCmd)
 	rootCmd.AddCommand(workersCmd)
 	rootCmd.AddCommand(connectorsCmd)
@@ -167,6 +178,14 @@ func applyFlagOverrides(cmd *cobra.Command, snap *config.Config) {
 	}
 }
 
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Print kc-hunter version and build info",
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Fprintf(os.Stdout, "kc-hunter %s (commit: %s)\n", version, commit)
+	},
+}
+
 // Execute runs the root command.
 func Execute() error {
 	return rootCmd.Execute()
@@ -191,6 +210,23 @@ func initLogger(debug bool) {
 		},
 	})
 	slog.SetDefault(slog.New(h))
+}
+
+// --- output helpers ---
+
+// info prints an informational message to stderr.
+// Suppressed by --quiet. Never goes to stdout (which is reserved for data).
+func info(format string, args ...any) {
+	if !quietMode {
+		fmt.Fprintf(os.Stderr, format+"\n", args...)
+	}
+}
+
+// warn prints a warning message to stderr.
+// Always shown, even with --quiet, because warnings indicate data gaps
+// that affect output interpretation.
+func warn(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "warning: "+format+"\n", args...)
 }
 
 // --- shared helpers used by multiple commands ---
