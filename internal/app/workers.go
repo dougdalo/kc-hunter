@@ -17,7 +17,7 @@ var workersCmd = &cobra.Command{
 }
 
 func runWorkers(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), suspectTimeout())
+	ctx, cancel := signalContext(suspectTimeout())
 	defer cancel()
 
 	k, err := newK8sClient()

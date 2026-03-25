@@ -26,7 +26,7 @@ and lists which data sources were unavailable.`,
 }
 
 func runSuspect(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), suspectTimeout())
+	ctx, cancel := signalContext(suspectTimeout())
 	defer cancel()
 
 	// 1. Discover pods (with step timeout: 20% of budget)

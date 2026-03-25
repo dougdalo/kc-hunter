@@ -5,12 +5,15 @@ package k8s
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 
 	"github.com/dougdalo/kc-hunter/internal/config"
+	"github.com/dougdalo/kc-hunter/internal/kcerr"
 	"github.com/dougdalo/kc-hunter/pkg/models"
 
 	corev1 "k8s.io/api/core/v1"
@@ -37,17 +40,23 @@ type Client struct {
 func NewClient(cfg *config.Config) (*Client, error) {
 	restCfg, err := buildRESTConfig(cfg.Kubeconfig)
 	if err != nil {
-		return nil, fmt.Errorf("kubernetes config: %w", err)
+		// KubeconfigNotFoundError already carries a user-friendly remediation;
+		// return it unwrapped so printRemediation picks up the specific hint.
+		var notFound *kcerr.KubeconfigNotFoundError
+		if errors.As(err, &notFound) {
+			return nil, notFound
+		}
+		return nil, &kcerr.K8sConnectivityError{Operation: "load kubeconfig", Cause: err}
 	}
 
 	cs, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
-		return nil, fmt.Errorf("kubernetes client: %w", err)
+		return nil, &kcerr.K8sConnectivityError{Operation: "create client", Cause: err}
 	}
 
 	mc, err := metricsclient.NewForConfig(restCfg)
 	if err != nil {
-		return nil, fmt.Errorf("metrics client: %w", err)
+		return nil, &kcerr.K8sConnectivityError{Operation: "create metrics client", Cause: err}
 	}
 
 	return &Client{
@@ -81,7 +90,14 @@ func buildRESTConfig(kubeconfig string) (*rest.Config, error) {
 	}
 
 	// 4. In-cluster service account
-	return rest.InClusterConfig()
+	cfg, err := rest.InClusterConfig()
+	if err != nil {
+		if errors.Is(err, rest.ErrNotInCluster) {
+			return nil, &kcerr.KubeconfigNotFoundError{Cause: err}
+		}
+		return nil, fmt.Errorf("in-cluster config: %w", err)
+	}
+	return cfg, nil
 }
 
 // DiscoverConnectPods finds Kafka Connect pods using Strimzi label selectors.
@@ -98,7 +114,11 @@ func (c *Client) DiscoverConnectPods(ctx context.Context) ([]models.PodInfo, err
 			LabelSelector: c.cfg.Labels,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("list pods in namespace %q: %w", ns, err)
+			return nil, &kcerr.PodDiscoveryError{
+				Namespace: ns,
+				Selector:  c.cfg.Labels,
+				Cause:     err,
+			}
 		}
 
 		for i := range pods.Items {
@@ -291,6 +311,28 @@ func (c *Client) ListNamespaces(ctx context.Context) ([]string, error) {
 		names = append(names, ns.Name)
 	}
 	return names, nil
+}
+
+// StreamPodLogs opens a follow-mode log stream for a pod.
+// The caller owns the returned ReadCloser and must close it when done.
+// tailLines controls how many historical lines to fetch before following.
+func (c *Client) StreamPodLogs(
+	ctx context.Context,
+	namespace, podName string,
+	tailLines int64,
+) (io.ReadCloser, error) {
+	opts := &corev1.PodLogOptions{
+		Follow:    true,
+		TailLines: &tailLines,
+	}
+
+	req := c.clientset.CoreV1().Pods(namespace).GetLogs(podName, opts)
+	stream, err := req.Stream(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("stream logs %s/%s: %w", namespace, podName, err)
+	}
+
+	return stream, nil
 }
 
 // --- internal helpers ---

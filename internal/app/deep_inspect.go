@@ -56,7 +56,7 @@ func (a *k8sExecAdapter) ExecInPod(
 }
 
 func runDeepInspect(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), suspectTimeout())
+	ctx, cancel := signalContext(suspectTimeout())
 	defer cancel()
 
 	ns := ""

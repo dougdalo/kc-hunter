@@ -8,6 +8,7 @@ import (
 
 	"github.com/dougdalo/kc-hunter/internal/connect"
 	"github.com/dougdalo/kc-hunter/internal/doctor"
+	"github.com/dougdalo/kc-hunter/internal/k8s"
 	"github.com/spf13/cobra"
 )
 
@@ -25,12 +26,13 @@ Checks performed:
   4. metrics-server availability
   5. Connect REST API reachability (via configured transport)
   6. Metrics provider reachability (if configured)
-  7. Exec permissions (for exec transport / deep-inspect)`,
+  7. Exec permissions (for exec transport / deep-inspect)
+  8. Strimzi replication factor mismatch (detects rebalance loops)`,
 	RunE: runDoctor,
 }
 
 func runDoctor(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout*3)
+	ctx, cancel := signalContext(cfg.Timeout * 3)
 	defer cancel()
 
 	report := doctor.Report{
@@ -151,6 +153,12 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 		})
 	}
 
+	// 8. Strimzi replication factor mismatch.
+	replCheck := doctor.CheckReplicationFactor(ctx, func(ctx context.Context) ([]doctor.ReplicationFactorInfo, error) {
+		return fetchReplicationInfos(ctx, k)
+	})
+	report.Results = append(report.Results, replCheck)
+
 	printReport(&report)
 
 	// Return exit code 2 when checks fail, so scripts can gate on `doctor`.
@@ -180,8 +188,42 @@ func printReport(report *doctor.Report) {
 	report.PrintTable(os.Stdout, colorize)
 }
 
+// fetchReplicationInfos queries Strimzi CRDs across all configured namespaces
+// and converts k8s types to doctor types.
+func fetchReplicationInfos(ctx context.Context, k *k8s.Client) ([]doctor.ReplicationFactorInfo, error) {
+	namespaces := cfg.Namespaces
+	if len(namespaces) == 0 || (len(namespaces) == 1 && namespaces[0] == "") {
+		namespaces = []string{""}
+	}
+
+	var all []doctor.ReplicationFactorInfo
+	for _, ns := range namespaces {
+		infos, err := k.GetStrimziReplicationInfo(ctx, ns)
+		if err != nil {
+			return nil, err
+		}
+		for _, info := range infos {
+			var mismatches []doctor.ReplicationMismatchDetail
+			for _, m := range info.Mismatches() {
+				mismatches = append(mismatches, doctor.ReplicationMismatchDetail{
+					FactorName: m.FactorName,
+					Value:      m.Value,
+					Brokers:    m.Brokers,
+				})
+			}
+			all = append(all, doctor.ReplicationFactorInfo{
+				KafkaName:     info.KafkaName,
+				KafkaReplicas: info.KafkaReplicas,
+				ConnectName:   info.ConnectName,
+				Mismatches:    mismatches,
+			})
+		}
+	}
+	return all, nil
+}
+
 func skipRemaining(reason string) []doctor.CheckResult {
-	names := []string{"namespaces", "pod-discovery", "metrics-server", "connect-rest", "metrics-provider", "exec-permissions"}
+	names := []string{"namespaces", "pod-discovery", "metrics-server", "connect-rest", "metrics-provider", "exec-permissions", "replication-factor"}
 	results := make([]doctor.CheckResult, len(names))
 	for i, name := range names {
 		results[i] = doctor.CheckResult{

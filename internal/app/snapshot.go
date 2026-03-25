@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 	"sort"
 	"time"
@@ -42,7 +41,7 @@ func init() {
 }
 
 func runSnapshotSave(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), suspectTimeout())
+	ctx, cancel := signalContext(suspectTimeout())
 	defer cancel()
 
 	k, err := newK8sClient()

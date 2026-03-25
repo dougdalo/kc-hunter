@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 	"sort"
 
@@ -15,7 +14,7 @@ var podsCmd = &cobra.Command{
 }
 
 func runPods(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	ctx, cancel := signalContext(cfg.Timeout)
 	defer cancel()
 
 	k, err := newK8sClient()

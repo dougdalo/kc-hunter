@@ -24,6 +24,6 @@ bin/
 .idea/
 *.swp
 .claude
-
+CLAUDE.md
 # Arquivos temporários
 *.tmp

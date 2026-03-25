@@ -570,6 +570,8 @@ go test -race ./...
 
 - **Read-Only** — Only `GET` requests against K8s API and Connect REST. Never modifies cluster state.
 - **Bounded Concurrency** — Semaphore-based pool (default: 10) prevents API server or Connect REST overload.
+- **Graceful Shutdown** — Ctrl+C propagates cancellation through all goroutines, API calls, and exec sessions. A second Ctrl+C force-exits immediately.
+- **Domain Error Diagnostics** — Errors include remediation hints specific to the failure type (K8s connectivity, Connect REST, JVM attach, metrics, timeout).
 - **Credential Reuse** — Uses your existing kubeconfig. No additional tokens or service accounts required.
 - **No Dependencies** — Static binary. No agents, sidecars, or CRDs to install.
 
@@ -579,7 +581,7 @@ go test -race ./...
 
 ```
 kc-hunter/
-├── cmd/kc-hunter/        # Entrypoint
+├── cmd/kc-hunter/        # Entrypoint with domain error dispatch
 │   └── main.go
 ├── internal/
 │   ├── app/              # CLI commands & orchestration
@@ -593,7 +595,8 @@ kc-hunter/
 │   ├── output/           # Table & JSON formatters (colorized terminal output)
 │   ├── snapshot/         # Save/load/diff cluster state snapshots
 │   ├── doctor/           # Prerequisite validation checks
-│   └── resilience/       # Retry, backoff, step timeout utilities
+│   ├── resilience/       # Retry, backoff, step timeout utilities
+│   └── kcerr/            # Domain-specific error types with remediation hints
 └── pkg/models/           # Shared domain types
 ```
 

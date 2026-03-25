@@ -369,3 +369,75 @@ func CheckExecPermissions(
 	r.Message = "exec into pods works"
 	return r
 }
+
+// ReplicationFactorInfo is the minimal data the replication check needs.
+// Decouples doctor from k8s package types.
+type ReplicationFactorInfo struct {
+	KafkaName     string
+	KafkaReplicas int64
+	ConnectName   string
+	Mismatches    []ReplicationMismatchDetail
+}
+
+// ReplicationMismatchDetail describes one factor > broker count.
+type ReplicationMismatchDetail struct {
+	FactorName string
+	Value      int64
+	Brokers    int64
+}
+
+// CheckReplicationFactor verifies that KafkaConnect replication factors
+// do not exceed the Kafka broker count — a common cause of infinite
+// rebalance loops in Strimzi.
+func CheckReplicationFactor(
+	ctx context.Context,
+	fetch func(ctx context.Context) ([]ReplicationFactorInfo, error),
+) CheckResult {
+	start := time.Now()
+	r := CheckResult{Name: "replication-factor"}
+
+	infos, err := fetch(ctx)
+	r.Duration = time.Since(start)
+	if err != nil {
+		r.Status = StatusWarn
+		r.Message = fmt.Sprintf("cannot inspect Strimzi CRDs: %v", err)
+		r.Remediation = "grant get/list permissions for kafkas.kafka.strimzi.io and kafkaconnects.kafka.strimzi.io; or verify CRDs are installed"
+		return r
+	}
+
+	if len(infos) == 0 {
+		r.Status = StatusSkip
+		r.Message = "no Kafka/KafkaConnect CRs found in target namespace(s)"
+		return r
+	}
+
+	// Collect all mismatches across all Connect instances.
+	var allMismatches []string
+	for _, info := range infos {
+		for _, m := range info.Mismatches {
+			allMismatches = append(allMismatches,
+				fmt.Sprintf("%s/%s: %s=%d > brokers=%d",
+					info.KafkaName, info.ConnectName, m.FactorName, m.Value, m.Brokers))
+		}
+	}
+
+	if len(allMismatches) > 0 {
+		r.Status = StatusFail
+		r.Message = fmt.Sprintf("replication factor > broker count (%d mismatch(es)):\n      %s",
+			len(allMismatches), strings.Join(allMismatches, "\n      "))
+		r.Remediation = "set config.storage.replication.factor, offset.storage.replication.factor, " +
+			"and status.storage.replication.factor to <= spec.kafka.replicas in your KafkaConnect CR; " +
+			"mismatched values cause infinite rebalance loops"
+		return r
+	}
+
+	// Build summary of what was verified.
+	var checked []string
+	for _, info := range infos {
+		checked = append(checked, fmt.Sprintf("%s/%s (brokers=%d)",
+			info.KafkaName, info.ConnectName, info.KafkaReplicas))
+	}
+	r.Status = StatusPass
+	r.Message = fmt.Sprintf("replication factors OK for: %s", strings.Join(checked, ", "))
+	return r
+}

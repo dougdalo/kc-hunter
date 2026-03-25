@@ -35,7 +35,7 @@ func runInteractive() error {
 		return fmt.Errorf("kubernetes client: %w", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	ctx, cancel := signalContext(cfg.Timeout)
 	defer cancel()
 
 	namespaces, err := k8sClient.ListNamespaces(ctx)

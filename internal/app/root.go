@@ -48,7 +48,10 @@ on localhost), which bypasses networking issues (e.g. GKE timeouts).
 Use --use-proxy to route through the K8s API server proxy instead.
 
 Run without arguments to launch an interactive guided wizard.`,
-	PersistentPreRunE: loadConfigFile,
+	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+		installForceQuit()
+		return loadConfigFile(cmd, args)
+	},
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return runInteractive()
 	},
@@ -102,6 +105,7 @@ func init() {
 	rootCmd.AddCommand(deepInspectCmd)
 	rootCmd.AddCommand(snapshotCmd)
 	rootCmd.AddCommand(doctorCmd)
+	rootCmd.AddCommand(connectorLogsCmd)
 }
 
 // loadConfigFile implements merge priority: defaults < config file < flags.

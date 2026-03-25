@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/dougdalo/kc-hunter/internal/discovery"
@@ -25,7 +24,7 @@ var inspectConnectorCmd = &cobra.Command{
 
 func runInspectWorker(cmd *cobra.Command, args []string) error {
 	target := args[0]
-	ctx, cancel := context.WithTimeout(context.Background(), suspectTimeout())
+	ctx, cancel := signalContext( suspectTimeout())
 	defer cancel()
 
 	k, err := newK8sClient()
@@ -65,7 +64,7 @@ func runInspectWorker(cmd *cobra.Command, args []string) error {
 
 func runInspectConnector(cmd *cobra.Command, args []string) error {
 	target := args[0]
-	ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	ctx, cancel := signalContext( cfg.Timeout)
 	defer cancel()
 
 	k, err := newK8sClient()

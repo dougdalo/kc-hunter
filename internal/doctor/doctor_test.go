@@ -442,3 +442,97 @@ func TestCheckExecPermissions(t *testing.T) {
 		}
 	})
 }
+
+func TestCheckReplicationFactor(t *testing.T) {
+	t.Run("all factors within broker count", func(t *testing.T) {
+		r := CheckReplicationFactor(context.Background(), func(ctx context.Context) ([]ReplicationFactorInfo, error) {
+			return []ReplicationFactorInfo{
+				{
+					KafkaName:     "my-kafka",
+					KafkaReplicas: 3,
+					ConnectName:   "my-connect",
+					Mismatches:    nil,
+				},
+			}, nil
+		})
+		if r.Status != StatusPass {
+			t.Errorf("status=%v, want PASS", r.Status)
+		}
+		if !strings.Contains(r.Message, "my-kafka/my-connect") {
+			t.Errorf("message should list checked pairs, got %q", r.Message)
+		}
+	})
+
+	t.Run("replication factor exceeds brokers", func(t *testing.T) {
+		r := CheckReplicationFactor(context.Background(), func(ctx context.Context) ([]ReplicationFactorInfo, error) {
+			return []ReplicationFactorInfo{
+				{
+					KafkaName:     "my-kafka",
+					KafkaReplicas: 1,
+					ConnectName:   "my-connect",
+					Mismatches: []ReplicationMismatchDetail{
+						{FactorName: "config.storage.replication.factor", Value: 3, Brokers: 1},
+						{FactorName: "offset.storage.replication.factor", Value: 3, Brokers: 1},
+					},
+				},
+			}, nil
+		})
+		if r.Status != StatusFail {
+			t.Errorf("status=%v, want FAIL", r.Status)
+		}
+		if !strings.Contains(r.Message, "2 mismatch") {
+			t.Errorf("message should mention mismatch count, got %q", r.Message)
+		}
+		if !strings.Contains(r.Remediation, "rebalance") {
+			t.Errorf("remediation should mention rebalance loops, got %q", r.Remediation)
+		}
+	})
+
+	t.Run("no CRs found", func(t *testing.T) {
+		r := CheckReplicationFactor(context.Background(), func(ctx context.Context) ([]ReplicationFactorInfo, error) {
+			return nil, nil
+		})
+		if r.Status != StatusSkip {
+			t.Errorf("status=%v, want SKIP", r.Status)
+		}
+	})
+
+	t.Run("CRD access error", func(t *testing.T) {
+		r := CheckReplicationFactor(context.Background(), func(ctx context.Context) ([]ReplicationFactorInfo, error) {
+			return nil, errors.New("forbidden")
+		})
+		if r.Status != StatusWarn {
+			t.Errorf("status=%v, want WARN", r.Status)
+		}
+		if !strings.Contains(r.Remediation, "kafkas.kafka.strimzi.io") {
+			t.Errorf("remediation should mention CRD resource, got %q", r.Remediation)
+		}
+	})
+
+	t.Run("multiple connect instances mixed results", func(t *testing.T) {
+		r := CheckReplicationFactor(context.Background(), func(ctx context.Context) ([]ReplicationFactorInfo, error) {
+			return []ReplicationFactorInfo{
+				{
+					KafkaName:     "kafka-prod",
+					KafkaReplicas: 3,
+					ConnectName:   "connect-ok",
+					Mismatches:    nil,
+				},
+				{
+					KafkaName:     "kafka-prod",
+					KafkaReplicas: 3,
+					ConnectName:   "connect-bad",
+					Mismatches: []ReplicationMismatchDetail{
+						{FactorName: "status.storage.replication.factor", Value: 5, Brokers: 3},
+					},
+				},
+			}, nil
+		})
+		if r.Status != StatusFail {
+			t.Errorf("status=%v, want FAIL (one Connect has mismatch)", r.Status)
+		}
+		if !strings.Contains(r.Message, "connect-bad") {
+			t.Errorf("message should name the bad connect, got %q", r.Message)
+		}
+	})
+}

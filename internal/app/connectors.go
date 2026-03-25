@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"fmt"
 
 	"github.com/spf13/cobra"
@@ -14,7 +13,7 @@ var connectorsCmd = &cobra.Command{
 }
 
 func runConnectors(cmd *cobra.Command, args []string) error {
-	ctx, cancel := context.WithTimeout(context.Background(), suspectTimeout())
+	ctx, cancel := signalContext(suspectTimeout())
 	defer cancel()
 
 	k, err := newK8sClient()

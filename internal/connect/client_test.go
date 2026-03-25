@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 )
 
@@ -11,11 +12,14 @@ import (
 type mockTransport struct {
 	responses map[string][]byte
 	errors    map[string]error
+	mu        sync.Mutex
 	calls     []string // records paths called
 }
 
 func (m *mockTransport) Get(_ context.Context, _ PodRef, path string) ([]byte, error) {
+	m.mu.Lock()
 	m.calls = append(m.calls, path)
+	m.mu.Unlock()
 	if err, ok := m.errors[path]; ok {
 		return nil, err
 	}
