@@ -1,19 +1,36 @@
 <p align="center">
   <h1 align="center">kc-hunter</h1>
   <p align="center">
-    <strong>The Missing Observability Tool for Strimzi Kafka Connect</strong>
+    <strong>Kubernetes-Native Observability CLI/TUI for Strimzi Kafka Connect</strong>
   </p>
   <p align="center">
-    Diagnose memory pressure in high-density Kafka Connect clusters.<br/>
-    Correlate Pod RAM, Connector Topology, and Task State into Ranked Suspects.
+    Diagnose memory pressure, tail multiplexed logs, and inspect JVMs<br/>
+    across high-density Kafka Connect clusters — from any bastion host.
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/Go-1.25-00ADD8?style=flat&logo=go" alt="Go 1.25"/>
     <img src="https://img.shields.io/badge/License-MIT-green?style=flat" alt="License"/>
     <img src="https://img.shields.io/badge/Platform-Linux-FCC624?style=flat&logo=linux" alt="Linux"/>
     <img src="https://img.shields.io/badge/Read--Only-Safe%20for%20Prod-brightgreen?style=flat" alt="Read-Only"/>
+    <img src="https://img.shields.io/badge/Static%20Binary-No%20Dependencies-blue?style=flat" alt="Static Binary"/>
   </p>
 </p>
+
+---
+
+## Key Features
+
+**Interactive TUI** — Navigate clusters, namespaces, and connectors through a guided wizard. No flags to memorize; just arrow keys.
+
+**GKE-Safe Transport** — Default mode uses K8s SPDY exec tunnels (`curl`/`wget` inside pods) to bypass ingress and service mesh timeouts automatically. Falls back gracefully.
+
+**Low Memory Footprint** — Transport layer returns `io.ReadCloser` streams; JSON is decoded via `json.NewDecoder` with token-level streaming for connector lists. Handles many connectors smoothly on tiny bastion hosts.
+
+**Smart Log Tailing** — Multiplexes live logs across all worker pods, filters REST polling noise (`GET /connectors/.../status`), continues multi-line Java stack traces, and pre-fetches frozen FAILED task traces from the REST API before tailing begins.
+
+**Deep JVM Inspection** — Attaches to containers via `jcmd` to extract heap info, class histograms, and thread counts. Automatically handles UID mismatches using `su` or `setpriv` when the exec user differs from the Java process owner (common in Strimzi images running as UID 1001).
+
+**Suspicion Scoring** — 9 weighted signals (structural + metrics) produce a 0-100 score per task, ranking the most likely memory culprits. Works even without Prometheus — falls back to K8s + Connect REST signals.
 
 ---
 
@@ -246,6 +263,8 @@ kc-hunter deep-inspect connect-worker-3 -c my-container
 
 Returns heap summary, class histogram, thread count, GC info, and suspicious classes matching known Kafka Connect patterns.
 
+**Automatic UID handling:** Strimzi images typically run the JVM as UID 1001, while `kubectl exec` may enter as root. `jcmd` requires matching UIDs to attach. kc-hunter automatically detects this mismatch and wraps `jcmd` with `su` or `setpriv` — no manual intervention needed.
+
 ### `inspect-worker` / `inspect-connector` — Targeted Detail
 
 ```bash
@@ -333,13 +352,39 @@ Remediation:
 - Connect REST is tested against the first discovered pod only
 - Does not validate Prometheus query correctness — only checks reachability
 
+### `connector-logs` — Smart Log Tailing
+
+Tail logs across all worker pods for a specific connector, with intelligent filtering:
+
+```bash
+# Interactive selection
+kc-hunter connector-logs -n kafka-prod
+
+# Direct connector name
+kc-hunter connector-logs my-jdbc-source -n kafka-prod
+
+# Custom tail depth
+kc-hunter connector-logs my-jdbc-source -n kafka-prod --tail 1000
+```
+
+**What makes it smart:**
+
+1. **REST API trace pre-flight** — Before tailing, fetches `GET /connectors/{name}/status` and prints any FAILED task traces in red. This catches exceptions that happened hours ago and scrolled out of the log window.
+2. **Noise filtering** — Automatically drops REST API access log lines (`GET /connectors/.../status`, `.../config`) that flood Kafka Connect logs.
+3. **Stack trace continuation** — When a matching line triggers an exception, subsequent `\tat`, `Caused by:`, and `... N more` lines are printed even without the connector name.
+4. **1 MB scanner buffer** — Handles long Java stack traces without truncation.
+5. **Multiplexed output** — Concurrent streams from all pods merge in real time with a dimmed `[pod-name]` prefix.
+
+Press **Ctrl+C** to stop — all K8s log streams close immediately.
+
 ### Interactive Mode
 
 Running `kc-hunter` without arguments launches a guided wizard:
 
-1. **Action** — Suspect Report, Pod Overview, Worker Map, or Deep JVM Inspect
-2. **Namespace** — Dynamically fetched from the cluster
+1. **Action** — Suspect Report, Pod Overview, Worker Map, Deep JVM Inspect, or Connector Live Logs
+2. **Namespace** — Searchable list, dynamically fetched from the cluster
 3. **Pod** *(deep-inspect only)* — Pick a specific pod or inspect all
+4. **Connector** *(connector-logs only)* — Searchable list fetched via Connect REST API
 
 ---
 
@@ -570,7 +615,8 @@ go test -race ./...
 
 - **Read-Only** — Only `GET` requests against K8s API and Connect REST. Never modifies cluster state.
 - **Bounded Concurrency** — Semaphore-based pool (default: 10) prevents API server or Connect REST overload.
-- **Graceful Shutdown** — Ctrl+C propagates cancellation through all goroutines, API calls, and exec sessions. A second Ctrl+C force-exits immediately.
+- **Streaming JSON** — Transport returns `io.ReadCloser`; JSON is decoded via `json.NewDecoder` with element-level streaming for large arrays. No full-body buffering — safe for many connector clusters on memory-constrained bastion hosts.
+- **Graceful Shutdown** — Ctrl+C propagates cancellation through all goroutines, API calls, exec sessions, and log streams. A second Ctrl+C force-exits immediately.
 - **Domain Error Diagnostics** — Errors include remediation hints specific to the failure type (K8s connectivity, Connect REST, JVM attach, metrics, timeout).
 - **Credential Reuse** — Uses your existing kubeconfig. No additional tokens or service accounts required.
 - **No Dependencies** — Static binary. No agents, sidecars, or CRDs to install.
@@ -603,5 +649,6 @@ kc-hunter/
 ---
 
 <p align="center">
-  Built for SREs and Platform Engineers managing Strimzi Kafka Connect at scale.
+  Built for SREs and Platform Engineers managing Strimzi Kafka Connect at scale.<br/>
+  <sub>Tested against production clusters with many connectors on GKE, EKS, and bare-metal bastion hosts.</sub>
 </p>

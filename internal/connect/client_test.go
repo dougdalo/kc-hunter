@@ -1,9 +1,11 @@
 package connect
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sync"
 	"testing"
 )
@@ -16,7 +18,7 @@ type mockTransport struct {
 	calls     []string // records paths called
 }
 
-func (m *mockTransport) Get(_ context.Context, _ PodRef, path string) ([]byte, error) {
+func (m *mockTransport) Get(_ context.Context, _ PodRef, path string) (io.ReadCloser, error) {
 	m.mu.Lock()
 	m.calls = append(m.calls, path)
 	m.mu.Unlock()
@@ -24,7 +26,7 @@ func (m *mockTransport) Get(_ context.Context, _ PodRef, path string) ([]byte, e
 		return nil, err
 	}
 	if data, ok := m.responses[path]; ok {
-		return data, nil
+		return io.NopCloser(bytes.NewReader(data)), nil
 	}
 	return nil, fmt.Errorf("unexpected path: %s", path)
 }
@@ -293,10 +295,12 @@ func TestExecTransport_CurlSuccess(t *testing.T) {
 		return `["conn-a"]`, "", nil
 	}, 8083, "connect")
 
-	data, err := et.Get(context.Background(), PodRef{Name: "pod-0", Namespace: "kafka"}, "/connectors")
+	rc, err := et.Get(context.Background(), PodRef{Name: "pod-0", Namespace: "kafka"}, "/connectors")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer rc.Close()
+	data, _ := io.ReadAll(rc)
 	if string(data) != `["conn-a"]` {
 		t.Errorf("data=%q", string(data))
 	}
@@ -315,10 +319,12 @@ func TestExecTransport_FallbackToWget(t *testing.T) {
 		return "", "", fmt.Errorf("unexpected command")
 	}, 8083, "connect")
 
-	data, err := et.Get(context.Background(), PodRef{Name: "pod-0", Namespace: "kafka"}, "/test")
+	rc, err := et.Get(context.Background(), PodRef{Name: "pod-0", Namespace: "kafka"}, "/test")
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer rc.Close()
+	data, _ := io.ReadAll(rc)
 	if string(data) != `{"status":"ok"}` {
 		t.Errorf("data=%q", string(data))
 	}

@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/AlecAivazis/survey/v2"
+	"github.com/dougdalo/kc-hunter/internal/connect"
 	"github.com/dougdalo/kc-hunter/internal/k8s"
 	"github.com/dougdalo/kc-hunter/pkg/models"
 	"github.com/spf13/cobra"
@@ -65,10 +66,29 @@ func runConnectorLogs(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	return tailConnectorLogs(ctx, k, pods, connectorName)
+}
+
+// tailConnectorLogs is the core log-tailing logic, reusable from both the
+// CLI subcommand and the interactive TUI. It fetches the connector status
+// trace first (to surface past failures), then fans in live log streams
+// from all pods, filters by connector name, and prints until the context
+// is cancelled.
+func tailConnectorLogs(
+	ctx context.Context,
+	k *k8s.Client,
+	pods []models.PodInfo,
+	connectorName string,
+) error {
+	// Step 1: Fetch and print any FAILED task traces from the REST API.
+	// This is the most reliable source of truth for past failures that may
+	// no longer appear in the last N log lines.
+	printStatusTraces(ctx, k, pods, connectorName)
+
 	info("Tailing logs for connector %q across %d pod(s)...", connectorName, len(pods))
 	info("Press Ctrl+C to stop.\n")
 
-	// Step 3: Fan-in log lines from all pods into a single channel.
+	// Step 2: Fan-in log lines from all pods into a single channel.
 	lines := make(chan logLine, 256)
 
 	var wg sync.WaitGroup
@@ -86,8 +106,71 @@ func runConnectorLogs(cmd *cobra.Command, args []string) error {
 		close(lines)
 	}()
 
-	// Step 4: Consume, filter, and print.
 	return filterAndPrint(lines, connectorName)
+}
+
+// printStatusTraces queries the Kafka Connect REST API for the connector's
+// current status and prints any FAILED task traces to the terminal. This
+// catches exceptions that happened hours ago and are no longer in the pod
+// log tail window.
+func printStatusTraces(
+	ctx context.Context,
+	k *k8s.Client,
+	pods []models.PodInfo,
+	connectorName string,
+) {
+	cc := newConnectClient(k)
+
+	// Try each pod until we get a successful status response.
+	var status *models.ConnectorInfo
+	for _, pod := range pods {
+		ref := connect.PodRef{
+			Name:      pod.Name,
+			Namespace: pod.Namespace,
+			URL:       pod.ConnectURL,
+		}
+		s, err := cc.GetConnectorStatus(ctx, ref, connectorName)
+		if err != nil {
+			slog.Debug("status fetch failed, trying next pod",
+				"pod", pod.Name, "error", err)
+			continue
+		}
+		status = s
+		break
+	}
+
+	if status == nil {
+		warn("could not fetch connector status from REST API")
+		return
+	}
+
+	// Print connector-level state if not RUNNING.
+	if status.State != "RUNNING" {
+		fmt.Fprintf(os.Stderr,
+			"\033[1;33m[REST API] Connector %q state: %s\033[0m\n\n",
+			connectorName, status.State)
+	}
+
+	// Print each failed task trace.
+	hasFailures := false
+	for _, task := range status.Tasks {
+		if task.State != "FAILED" {
+			continue
+		}
+		hasFailures = true
+		trace := task.Trace
+		if trace == "" {
+			trace = "(no trace available)"
+		}
+		fmt.Fprintf(os.Stderr,
+			"\033[1;31m[REST API] Task %d FAILED:\033[0m\n\033[31m%s\033[0m\n\n",
+			task.TaskID, trace)
+	}
+
+	if hasFailures {
+		fmt.Fprintf(os.Stderr,
+			"\033[2m--- end of REST API traces, starting live log tail ---\033[0m\n\n")
+	}
 }
 
 // logLine carries a single log line with its source pod identifier.
@@ -176,13 +259,78 @@ func streamPodLogs(
 
 // filterAndPrint reads from the merged log channel and prints lines
 // containing the connector name, prefixed with the pod identifier.
+// It filters out noisy REST API access logs and continues printing
+// multi-line Java stack traces that follow a matching line.
 func filterAndPrint(lines <-chan logLine, connectorName string) error {
+	// Track stack trace continuation state per pod. When a line matches
+	// the connector name, we start printing. Subsequent lines that look
+	// like stack trace continuations (\tat ..., Caused by:, ...) are
+	// printed too, even if they don't contain the connector name.
+	inTrace := make(map[string]bool)
+
 	for line := range lines {
-		if strings.Contains(line.text, connectorName) {
-			fmt.Fprintf(os.Stdout, "\033[36m[%s]\033[0m %s\n", line.pod, line.text)
+		text := line.text
+
+		// Noise filter: skip REST API access logs polling status/config.
+		if isAccessLogNoise(text) {
+			continue
 		}
+
+		if strings.Contains(text, connectorName) {
+			// Matched line — print it and enter trace-continuation mode.
+			inTrace[line.pod] = true
+			printLogLine(line.pod, text)
+			continue
+		}
+
+		// Stack trace continuation: lines starting with whitespace
+		// (e.g. "\tat org.apache...") or "Caused by:" belong to the
+		// preceding exception. Keep printing until we see a normal log line.
+		if inTrace[line.pod] && isStackTraceContinuation(text) {
+			printLogLine(line.pod, text)
+			continue
+		}
+
+		// Non-matching, non-continuation line — stop trace mode for this pod.
+		inTrace[line.pod] = false
 	}
 	return nil
+}
+
+// isAccessLogNoise returns true for HTTP access log lines generated by
+// Kafka Connect status/config polling — these flood the output and carry
+// no diagnostic value.
+func isAccessLogNoise(text string) bool {
+	if !strings.Contains(text, "GET /connectors/") {
+		return false
+	}
+	return strings.Contains(text, "/status") || strings.Contains(text, "/config")
+}
+
+// isStackTraceContinuation returns true for lines that are typically part
+// of a Java stack trace following an exception line.
+func isStackTraceContinuation(text string) bool {
+	if len(text) == 0 {
+		return false
+	}
+	// Java stack frames: "\tat org.apache.kafka..."
+	if text[0] == '\t' || strings.HasPrefix(text, "    at ") {
+		return true
+	}
+	// Chained exceptions.
+	if strings.HasPrefix(text, "Caused by:") {
+		return true
+	}
+	// "... N more" at the end of truncated traces.
+	if strings.HasPrefix(text, "... ") && strings.HasSuffix(text, " more") {
+		return true
+	}
+	return false
+}
+
+// printLogLine writes a single log line with a dimmed pod prefix.
+func printLogLine(pod, text string) {
+	fmt.Fprintf(os.Stdout, "\033[2m[%s]\033[0m %s\n", pod, text)
 }
 
 // podPrefix returns a short identifier from a pod name.

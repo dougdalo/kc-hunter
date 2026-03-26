@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -113,13 +112,8 @@ func (p *PrometheusProvider) instantQuery(ctx context.Context, query string) (fl
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return 0, err
-	}
-
 	var pr promResponse
-	if err := json.Unmarshal(body, &pr); err != nil {
+	if err := json.NewDecoder(resp.Body).Decode(&pr); err != nil {
 		return 0, err
 	}
 

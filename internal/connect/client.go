@@ -8,6 +8,7 @@
 package connect
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -24,11 +25,12 @@ import (
 // This lets us swap between direct HTTP and K8s API server proxy
 // without changing any Connect protocol logic.
 type Transport interface {
-	// Get performs an HTTP GET against a Connect pod and returns the response body.
+	// Get performs an HTTP GET against a Connect pod and returns a stream
+	// of the response body. The caller must close the returned ReadCloser.
 	// podRef identifies the target pod (either a URL for direct mode, or
 	// structured pod identity for proxy mode).
 	// path is the Connect REST path, e.g. "/connectors" or "/connectors/foo/status".
-	Get(ctx context.Context, podRef PodRef, path string) ([]byte, error)
+	Get(ctx context.Context, podRef PodRef, path string) (io.ReadCloser, error)
 }
 
 // PodRef identifies a Connect pod for both transport modes.
@@ -74,15 +76,35 @@ type connectorStatus struct {
 }
 
 // ListConnectors returns names of all connectors on a Connect cluster.
+// Uses streaming JSON decode to avoid loading the entire array into a
+// single []byte buffer — important for clusters with 800+ connectors.
 func (c *Client) ListConnectors(ctx context.Context, ref PodRef) ([]string, error) {
-	body, err := c.transport.Get(ctx, ref, "/connectors")
+	rc, err := c.transport.Get(ctx, ref, "/connectors")
 	if err != nil {
 		return nil, err
 	}
-	var names []string
-	if err := json.Unmarshal(body, &names); err != nil {
+	defer rc.Close()
+
+	dec := json.NewDecoder(rc)
+
+	// Consume opening '['.
+	tok, err := dec.Token()
+	if err != nil {
 		return nil, fmt.Errorf("parse connector list: %w", err)
 	}
+	if delim, ok := tok.(json.Delim); !ok || delim != '[' {
+		return nil, fmt.Errorf("parse connector list: expected '[', got %v", tok)
+	}
+
+	var names []string
+	for dec.More() {
+		var name string
+		if err := dec.Decode(&name); err != nil {
+			return nil, fmt.Errorf("parse connector name: %w", err)
+		}
+		names = append(names, name)
+	}
+
 	return names, nil
 }
 
@@ -90,13 +112,14 @@ func (c *Client) ListConnectors(ctx context.Context, ref PodRef) ([]string, erro
 func (c *Client) GetConnectorStatus(
 	ctx context.Context, ref PodRef, name string,
 ) (*models.ConnectorInfo, error) {
-	body, err := c.transport.Get(ctx, ref, fmt.Sprintf("/connectors/%s/status", name))
+	rc, err := c.transport.Get(ctx, ref, fmt.Sprintf("/connectors/%s/status", name))
 	if err != nil {
 		return nil, err
 	}
+	defer rc.Close()
 
 	var status connectorStatus
-	if err := json.Unmarshal(body, &status); err != nil {
+	if err := json.NewDecoder(rc).Decode(&status); err != nil {
 		return nil, fmt.Errorf("parse status for %s: %w", name, err)
 	}
 
@@ -125,12 +148,14 @@ func (c *Client) GetConnectorStatus(
 func (c *Client) GetConnectorConfig(
 	ctx context.Context, ref PodRef, name string,
 ) (map[string]string, error) {
-	body, err := c.transport.Get(ctx, ref, fmt.Sprintf("/connectors/%s/config", name))
+	rc, err := c.transport.Get(ctx, ref, fmt.Sprintf("/connectors/%s/config", name))
 	if err != nil {
 		return nil, err
 	}
+	defer rc.Close()
+
 	var cfg map[string]string
-	if err := json.Unmarshal(body, &cfg); err != nil {
+	if err := json.NewDecoder(rc).Decode(&cfg); err != nil {
 		return nil, fmt.Errorf("parse config for %s: %w", name, err)
 	}
 	return cfg, nil
@@ -221,7 +246,7 @@ func NewDirectTransport(timeout time.Duration) *DirectTransport {
 	}
 }
 
-func (d *DirectTransport) Get(ctx context.Context, ref PodRef, path string) ([]byte, error) {
+func (d *DirectTransport) Get(ctx context.Context, ref PodRef, path string) (io.ReadCloser, error) {
 	url := ref.URL + path
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -234,14 +259,16 @@ func (d *DirectTransport) Get(ctx context.Context, ref PodRef, path string) ([]b
 	if err != nil {
 		return nil, fmt.Errorf("GET %s: %w", url, err)
 	}
-	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
 		body, _ := io.ReadAll(resp.Body)
 		return nil, fmt.Errorf("GET %s: status %d: %s", url, resp.StatusCode, truncate(string(body), 200))
 	}
 
-	return io.ReadAll(resp.Body)
+	// Return the body directly — caller decodes via json.NewDecoder
+	// without buffering the entire payload into memory.
+	return resp.Body, nil
 }
 
 // ProxyTransport routes requests through the K8s API server proxy.
@@ -274,7 +301,7 @@ func NewProxyTransport(proxyGet ProxyGetFunc, connectPort int) *ProxyTransport {
 	}
 }
 
-func (p *ProxyTransport) Get(ctx context.Context, ref PodRef, path string) ([]byte, error) {
+func (p *ProxyTransport) Get(ctx context.Context, ref PodRef, path string) (io.ReadCloser, error) {
 	if ref.Namespace == "" || ref.Name == "" {
 		return nil, fmt.Errorf("proxy transport requires pod name and namespace, got ref=%+v", ref)
 	}
@@ -284,7 +311,11 @@ func (p *ProxyTransport) Get(ctx context.Context, ref PodRef, path string) ([]by
 		path = path[1:]
 	}
 
-	return p.proxyGet(ctx, ref.Namespace, ref.Name, p.port, path)
+	body, err := p.proxyGet(ctx, ref.Namespace, ref.Name, p.port, path)
+	if err != nil {
+		return nil, err
+	}
+	return io.NopCloser(bytes.NewReader(body)), nil
 }
 
 // --- Exec-based Transport ---
@@ -316,7 +347,7 @@ func NewExecTransport(execFn ExecFunc, connectPort int, container string) *ExecT
 	}
 }
 
-func (e *ExecTransport) Get(ctx context.Context, ref PodRef, path string) ([]byte, error) {
+func (e *ExecTransport) Get(ctx context.Context, ref PodRef, path string) (io.ReadCloser, error) {
 	if ref.Namespace == "" || ref.Name == "" {
 		return nil, fmt.Errorf("exec transport requires pod name and namespace, got ref=%+v", ref)
 	}
@@ -348,7 +379,7 @@ func (e *ExecTransport) Get(ctx context.Context, ref PodRef, path string) ([]byt
 		return nil, fmt.Errorf("exec %s in %s/%s: empty response", path, ref.Namespace, ref.Name)
 	}
 
-	return []byte(out), nil
+	return io.NopCloser(strings.NewReader(out)), nil
 }
 
 func truncate(s string, n int) string {
